@@ -313,15 +313,30 @@ class ProcurementSearcher:
         return 0.0
 
     def _extract_link(self, lot):
-        """Extract and validate link."""
-        link_el = lot.select_one("a")
-        if link_el and link_el.get("href"):
-            href = link_el["href"]
-            if href.startswith("http"):
-                return href
-            else:
-                return urljoin(CONFIG["BASE_URL"], href)
+        base_url = CONFIG["BASE_URL"]
+
+        link_el = lot.select_one(".registry-entry__header-mid__number a[href]")
+        if link_el:
+            href = link_el["href"].strip()
+            if href:
+                return urljoin(base_url, href)
+
+        # 2. Альтернативный вариант — если структура чуть отличается
+        candidates = lot.select("a[href*='notice/']")
+        for link in candidates:
+            href = (link.get("href") or "").strip()
+            if not href:
+                continue
+            # пропускаем ссылки на printForm
+            if "printForm" in href.lower():
+                continue
+            if "view" in href.lower() and "regNumber" in href:
+                # ТУТ тоже нужно делать urljoin, иначе получаешь только хвост
+                return urljoin(base_url, href)
+
+        # 3. Если всё совсем плохо — явное "не найдено"
         return "Ссылка не найдена"
+
 
     # УЛУЧШЕННЫЕ МЕТОДЫ ДЛЯ РАБОТЫ С ДОКУМЕНТАМИ
     def _extract_notice_info_id(self, url):
