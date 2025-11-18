@@ -83,13 +83,19 @@ class ProcurementSearcher:
             law_params = self._get_law_params(law)
             params.update(law_params)
 
+        if min_price is not None and min_price is not None :
+            self._add_price_params(params, min_price, max_price)
+
         if progress_callback:
             progress_callback("Отправка запроса...")
 
         try:
             logger.info(
-                f"Searching for: {keyword} with filters - stage: {purchase_stage}, law: {law}"
+                f"Searching for: {keyword!r} with filters - "
+                f"stage: {purchase_stage}, law: {law}, "
+                f"min_price: {min_price}, max_price: {max_price}"
             )
+
             response = self.session.get(
                 url, params=params, timeout=CONFIG["REQUEST_TIMEOUT"]
             )
@@ -135,6 +141,53 @@ class ProcurementSearcher:
             "PP615": {"ppRf615": "on"},
         }
         return law_mapping.get(law, {})
+
+    def _add_price_params(self, params: dict, min_price, max_price) -> None:
+        """
+        Добавляет в параметры запроса фильтр по цене так,
+        как это делает сайт zakupki.gov.ru:
+
+        priceFromGeneral — минимальная цена
+        priceToGeneral   — максимальная цена
+        currencyIdGeneral = -1 (любая валюта / по умолчанию)
+        """
+
+        def _to_int_or_none(value):
+            if value is None:
+                return None
+            if isinstance(value, (int, float)):
+                return int(value)
+
+            # Строка из UI: убираем пробелы/неразрывные пробелы, меняем запятую на точку
+            s = str(value).strip()
+            if not s:
+                return None
+            s = s.replace("\u00a0", "").replace(" ", "")
+            s = s.replace(",", ".")
+            try:
+                return int(float(s))
+            except ValueError:
+                logger.warning(f"Не удалось преобразовать цену '{value}' в число")
+                return None
+
+        min_val = _to_int_or_none(min_price)
+        max_val = _to_int_or_none(max_price)
+
+        if min_val is not None:
+            params["priceFromGeneral"] = str(min_val)
+        if max_val is not None:
+            params["priceToGeneral"] = str(max_val)
+
+        # как в примере запроса с сайта: -1 = любая валюта
+        if "currencyIdGeneral" not in params:
+            params["currencyIdGeneral"] = "-1"
+
+        logger.info(
+            "Фильтр по цене в запросе: priceFromGeneral=%s, priceToGeneral=%s, currencyIdGeneral=%s",
+            params.get("priceFromGeneral"),
+            params.get("priceToGeneral"),
+            params.get("currencyIdGeneral"),
+        )
 
     def _parse_results(
             self, html_content, min_price=None, max_price=None, progress_callback=None
