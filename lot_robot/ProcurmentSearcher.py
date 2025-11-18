@@ -260,8 +260,47 @@ class ProcurementSearcher:
 
     def _extract_title(self, lot):
         """Extract title with multiple fallback selectors."""
+        header_text = None
+        object_text = None
+
+        # 1. Заголовок сверху: "44-ФЗ Электронный аукцион"
+        try:
+            header_el = lot.select_one(".registry-entry__header-top__title")
+            if header_el:
+                header_text = header_el.get_text(" ", strip=True)
+                if header_text:
+                    header_text = " ".join(header_text.split())
+        except Exception as e:
+            logger.debug(f"Failed to extract header title: {e}")
+
+        # 2. "Объект закупки" из body
+        try:
+            for body_block in lot.select(".registry-entry__body-block"):
+                title_el = body_block.select_one(".registry-entry__body-title")
+                if not title_el:
+                    continue
+
+                title_label = title_el.get_text(strip=True).lower()
+                if "объект закупки" in title_label:
+                    value_el = body_block.select_one(".registry-entry__body-value")
+                    if value_el:
+                        object_text = value_el.get_text(" ", strip=True)
+                        if object_text:
+                            object_text = " ".join(object_text.split())
+                    break
+        except Exception as e:
+            logger.debug(f"Failed to extract object text: {e}")
+
+        # 3. Комбинируем
+        if header_text and object_text:
+            return f"{header_text} — {object_text}"
+        if object_text:
+            return object_text
+        if header_text:
+            return header_text
+
+        # 4. Фолбэк — старые селекторы на всякий случай
         title_selectors = [
-            ".registry-entry__header-top__title",
             ".registry-entry__title",
             "[class*='title']",
             "h3",
@@ -272,7 +311,7 @@ class ProcurementSearcher:
         for selector in title_selectors:
             title_el = lot.select_one(selector)
             if title_el:
-                title = title_el.get_text(strip=True)
+                title = title_el.get_text(" ", strip=True)
                 if title and len(title) > 5:
                     return title
 
