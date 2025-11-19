@@ -7,6 +7,22 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from bs4 import BeautifulSoup
+from io import BytesIO
+
+try:
+    from docx import Document
+except ImportError:
+    Document = None
+
+try:
+    from openpyxl import load_workbook
+except ImportError:
+    load_workbook = None
+
+try:
+    import xlrd
+except ImportError:
+    xlrd = None
 
 from config import CONFIG, PURCHASE_STAGES, LAWS
 
@@ -686,25 +702,120 @@ class ProcurementSearcher:
         return results
 
     def _extract_text_from_content(self, content, filename, content_type):
-        """Извлекает текст из содержимого документа."""
+        """Извлекает текст из содержимого документа с учётом формата."""
+        filename_l = (filename or "").lower()
+        ctype = (content_type or "").lower()
+
         try:
-            # Для текстовых файлов
-            if filename.lower().endswith(".txt") or "text/" in content_type:
+            # 1. Обычный текст
+            if filename_l.endswith(".txt") or "text/" in ctype:
                 return content.decode("utf-8", errors="ignore")
 
-            # Для PDF, DOC, DOCX и других бинарных форматов
-            # Используем простой метод извлечения текста
-            text = content.decode("latin-1", errors="ignore")
+            # 2. DOCX
+            if filename_l.endswith(".docx") or "officedocument.wordprocessingml" in ctype:
+                text = self._extract_text_from_docx(content)
+                if text:
+                    return text
 
-            # Очищаем текст от непечатаемых символов
+            # 3. XLSX / XLSM
+            if filename_l.endswith((".xlsx", ".xlsm", ".xltx", ".xltm")) or "spreadsheetml" in ctype:
+                text = self._extract_text_from_xlsx(content)
+                if text:
+                    return text
+
+            # 4. Старые XLS
+            if filename_l.endswith(".xls") or "ms-excel" in ctype:
+                text = self._extract_text_from_xls(content)
+                if text:
+                    return text
+
+            # 5. Всё остальное (PDF, DOC, RTF и т.п.) — грубый универсальный метод
+            text = content.decode("latin-1", errors="ignore")
             text = re.sub(r"[^\x20-\x7E\xC0-\xFF\n\r\t]", " ", text)
             text = re.sub(r"\s+", " ", text)
-
             return text
 
         except Exception as e:
             logger.warning(f"Could not extract text from {filename}: {e}")
             return ""
+
+
+    def _extract_text_from_docx(self, content: bytes) -> str:
+        """Извлекает текст из .docx с помощью python-docx."""
+        if Document is None:
+            logger.warning("python-docx не установлен, использую простой декодер")
+            return ""
+
+        try:
+            doc = Document(BytesIO(content))
+            parts = []
+
+            # Параграфы
+            for p in doc.paragraphs:
+                text = p.text.strip()
+                if text:
+                    parts.append(text)
+
+            # Таблицы
+            for table in doc.tables:
+                for row in table.rows:
+                    row_text = " ".join(
+                        (cell.text or "").strip() for cell in row.cells if cell.text
+                    )
+                    if row_text:
+                        parts.append(row_text)
+
+            return "\n".join(parts)
+        except Exception as e:
+            logger.warning(f"Не удалось извлечь текст из DOCX: {e}")
+            return ""
+
+    def _extract_text_from_xlsx(self, content: bytes) -> str:
+        """Извлекает текст из .xlsx/.xlsm с помощью openpyxl."""
+        if load_workbook is None:
+            logger.warning("openpyxl не установлен, использую простой декодер")
+            return ""
+
+        try:
+            wb = load_workbook(BytesIO(content), data_only=True, read_only=True)
+            parts = []
+
+            for ws in wb.worksheets:
+                for row in ws.iter_rows():
+                    row_vals = []
+                    for cell in row:
+                        v = cell.value
+                        if v is None:
+                            continue
+                        row_vals.append(str(v))
+                    if row_vals:
+                        parts.append(" ".join(row_vals))
+
+            return "\n".join(parts)
+        except Exception as e:
+            logger.warning(f"Не удалось извлечь текст из XLSX: {e}")
+            return ""
+
+    def _extract_text_from_xls(self, content: bytes) -> str:
+        """Извлекает текст из .xls с помощью xlrd (если установлен)."""
+        if xlrd is None:
+            logger.warning("xlrd не установлен, использую простой декодер")
+            return ""
+        try:
+            book = xlrd.open_workbook(file_contents=content)
+            parts = []
+            for sheet in book.sheets():
+                for rx in range(sheet.nrows):
+                    row_vals = sheet.row_values(rx)
+                    row_vals = [str(v) for v in row_vals if v not in ("", None)]
+                    if row_vals:
+                        parts.append(" ".join(row_vals))
+            return "\n".join(parts)
+        except Exception as e:
+            logger.warning(f"Не удалось извлечь текст из XLS: {e}")
+            return ""
+
+
 
     def _get_keyword_context(self, text, keywords, max_contexts=2, context_length=100):
         """Извлекает контекст вокруг найденных ключевых слов."""
