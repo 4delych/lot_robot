@@ -390,28 +390,59 @@ class ProcurementSearcher:
             return None
 
     def download_documents(self, lot_url, progress_callback=None):
-        """Скачивает документы из лота с улучшенным парсингом."""
+        """
+        Скачивает документы из лота с учётом разных схем:
+        - 44-ФЗ: /epz/order/notice/ea20|ea44|.../view/common-info.html?regNumber=...
+                 -> /epz/order/notice/.../view/documents.html?regNumber=...
+        - 223-ФЗ: /epz/order/notice/notice223/... + noticeInfoId
+        """
         try:
-            # Извлекаем noticeInfoId из URL
-            notice_info_id = self._extract_notice_info_id(lot_url)
-            if not notice_info_id:
-                logger.error(f"Could not extract noticeInfoId from URL: {lot_url}")
-                return []
+            parsed_url = urlparse(lot_url)
+            path = parsed_url.path or ""
+            query_dict = parse_qs(parsed_url.query)  # значения = списки
 
-            # Формируем URL страницы документов
-            documents_url = (
-                f"{CONFIG['BASE_URL']}/epz/order/notice/notice223/documents.html"
-            )
-            params = {
-                "noticeInfoId": notice_info_id,
-                "backUrl": "/epz/order/notice/notice223/search.html",
-            }
+            documents_url = None
+            params = {}
+
+            # Ветка 44-ФЗ и родственных (ea20, ea44, zk20 и т.п.)
+            # Пример:
+            # https://zakupki.gov.ru/epz/order/notice/ea20/view/common-info.html?regNumber=0117...
+            if "/epz/order/notice/" in path and "view/" in path:
+                # Заменяем common-info.html -> documents.html
+                if "common-info.html" in path:
+                    docs_path = path.replace("common-info.html", "documents.html")
+                else:
+                    # вдруг нам уже дали documents.html
+                    docs_path = path
+
+                documents_url = urljoin(CONFIG["BASE_URL"], docs_path)
+
+                # parse_qs возвращает {key: [value]}; сплющим до {key: value}
+                params = {k: v[0] for k, v in query_dict.items() if v}
+
+            else:
+                # Ветка 223-ФЗ: старая схема через notice223 и noticeInfoId
+                notice_info_id = query_dict.get("noticeInfoId", [None])[0]
+                if not notice_info_id:
+                    notice_info_id = self._extract_notice_info_id(lot_url)
+
+                if not notice_info_id:
+                    logger.error(f"Could not extract noticeInfoId from URL: {lot_url}")
+                    return []
+
+                documents_url = (
+                    f"{CONFIG['BASE_URL']}/epz/order/notice/notice223/documents.html"
+                )
+                params = {
+                    "noticeInfoId": notice_info_id,
+                    "backUrl": "/epz/order/notice/notice223/search.html",
+                }
 
             if progress_callback:
-                progress_callback(f"Загрузка страницы документов...")
+                progress_callback("Загрузка страницы документов.")
 
             logger.info(
-                f"Downloading documents from: {documents_url}?noticeInfoId={notice_info_id}"
+                f"Downloading documents from: {documents_url} with params={params}"
             )
 
             response = self.session.get(
@@ -444,8 +475,8 @@ class ProcurementSearcher:
                 "[class*='file'] a",
                 ".cardFile",
                 ".file-download",
-                "tr td a",  # Ссылки в таблицах
-                ".table-block a",  # Ссылки в табличных блоках
+                "tr td a",        # Ссылки в таблицах
+                ".table-block a", # Ссылки в табличных блоках
             ]
 
             for selector in document_selectors:
@@ -529,9 +560,9 @@ class ProcurementSearcher:
         except Exception as e:
             logger.error(f"Error downloading documents: {e}")
             import traceback
-
             logger.error(traceback.format_exc())
             return []
+
 
     def _is_document_link(self, url, link_element):
         """Проверяет, является ли ссылка документом."""

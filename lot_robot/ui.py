@@ -1,8 +1,14 @@
+import os
+import sys
+import subprocess
+import tempfile
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, scrolledtext
 import threading
 import pandas as pd
 import logging
+import webbrowser
+
 
 from config import PURCHASE_STAGES, LAWS
 from ProcurmentSearcher import ProcurementSearcher
@@ -19,7 +25,7 @@ class ProcurementApp:
         self.searcher = ProcurementSearcher()
         self.search_thread = None
         self.analysis_results = []
-
+        self._temp_doc_files = []
         self._setup_ui()
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
@@ -429,12 +435,20 @@ class ProcurementApp:
     def _on_closing(self):
         """Handle application closing."""
         if self.search_thread and self.search_thread.is_alive():
-            if messagebox.askokcancel(
-                "Выход", "Поиск ещё выполняется. Закрыть приложение?"
+            if not messagebox.askokcancel(
+                    "Выход", "Поиск ещё выполняется. Закрыть приложение?"
             ):
-                self.root.destroy()
-        else:
-            self.root.destroy()
+                return
+
+        # Удаляем все временные файлы документов
+        for path in getattr(self, "_temp_doc_files", []):
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except Exception as e:
+                logger.warning(f"Не удалось удалить временный файл {path}: {e}")
+
+        self.root.destroy()
 
     # МЕТОДЫ ДЛЯ РАБОТЫ С ДОКУМЕНТАМИ
     def analyze_documents(self):
@@ -516,11 +530,12 @@ class ProcurementApp:
             self.progress_bar.stop()
 
     def _show_analysis_results(self, documents, analysis_results, keywords):
-        """Показывает результаты анализа."""
+        """Показывает результаты анализа документов и даёт открыть их из памяти."""
         result_window = tk.Toplevel(self.root)
         result_window.title("Результаты анализа документов")
         result_window.geometry("900x600")
 
+        # Верхняя часть — текстовый отчёт
         text_frame = ttk.Frame(result_window)
         text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
@@ -561,15 +576,15 @@ class ProcurementApp:
                 )
 
                 if "sample_context" in result and result["sample_context"]:
-                    text_widget.insert(tk.END, f"   Контекст:\n")
+                    text_widget.insert(tk.END, "   Контекст:\n")
                     for i, context in enumerate(result["sample_context"][:2]):
-                        text_widget.insert(tk.END, f"     {i+1}. {context}\n")
+                        text_widget.insert(tk.END, f"     {i + 1}. {context}\n")
 
                 text_widget.insert(tk.END, f"   Ссылка: {result['url']}\n\n")
         else:
             text_widget.insert(tk.END, "Ключевые слова не найдены в документах.\n\n")
 
-        # Все документы
+        # --- ВСЕ ДОКУМЕНТЫ (всегда показываем, не только в else) ---
         text_widget.insert(tk.END, "ВСЕ НАЙДЕННЫЕ ДОКУМЕНТЫ:\n", "subtitle")
         text_widget.insert(tk.END, "=" * 50 + "\n\n")
 
@@ -583,7 +598,100 @@ class ProcurementApp:
 
         text_widget.config(state=tk.DISABLED)
 
+        # --- НИЖНЯЯ ПАНЕЛЬ: выбор документа и открытие из памяти ---
+
+        controls_frame = ttk.Frame(result_window)
+        controls_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+
+        ttk.Label(
+            controls_frame,
+            text="Открыть документ (временный файл, удалится при закрытии программы):",
+        ).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 5))
+
+        doc_names = [doc["name"] for doc in documents]
+        self._doc_select_var = tk.StringVar(value=doc_names[0] if doc_names else "")
+
+        doc_combo = ttk.Combobox(
+            controls_frame,
+            textvariable=self._doc_select_var,
+            values=doc_names,
+            state="readonly",
+            width=70,
+        )
+        doc_combo.grid(row=1, column=0, sticky="we", padx=(0, 5))
+
+        def open_selected_doc():
+            name = self._doc_select_var.get()
+            if not name:
+                messagebox.showwarning(
+                    "Не выбран документ", "Выберите документ для открытия"
+                )
+                return
+
+            # Находим документ по имени среди уже скачанных (они в памяти)
+            doc = next((d for d in documents if d["name"] == name), None)
+            if not doc:
+                messagebox.showerror("Ошибка", "Не удалось найти выбранный документ")
+                return
+
+            self._open_document_from_memory(doc)
+
+        open_btn = ttk.Button(
+            controls_frame,
+            text="Открыть документ",
+            command=open_selected_doc,
+        )
+        open_btn.grid(row=1, column=1, sticky="e")
+
+        controls_frame.columnconfigure(0, weight=1)
+
+        # Сохраняем результаты анализа для экспорта
         self.analysis_results = analysis_results
+
+    def _open_document_from_memory(self, doc):
+        """
+        Открывает документ, который хранится в памяти (doc['content']),
+        через временный файл. Временный файл удаляется при закрытии приложения.
+        """
+        try:
+            content = doc.get("content")
+            if not content:
+                messagebox.showerror(
+                    "Ошибка", "У выбранного документа нет содержимого"
+                )
+                return
+
+            name = doc.get("name") or "document"
+            # Определяем расширение
+            suffix = ""
+            if "." in name:
+                suffix = name[name.rfind("."):]
+
+            # создаём временный файл (delete=False, чтобы успеть его открыть)
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+            tmp.write(content)
+            tmp_path = tmp.name
+            tmp.close()
+
+            # запоминаем путь, чтобы удалить при закрытии
+            self._temp_doc_files.append(tmp_path)
+
+            # Открываем системной программой
+            if sys.platform.startswith("win"):
+                os.startfile(tmp_path)  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", tmp_path])
+            else:
+                subprocess.Popen(["xdg-open", tmp_path])
+
+        except Exception as e:
+            logger.error(f"Failed to open document from memory: {e}")
+            messagebox.showerror(
+                "Ошибка",
+                "Не удалось открыть документ.\n"
+                "Возможно, на компьютере не установлена программа для этого типа файлов.",
+            )
+
 
     def export_analysis(self):
         """Экспортирует результаты анализа."""
