@@ -518,7 +518,9 @@ class ProcurementApp:
                 return
 
             update_progress(f"Анализ {len(documents)} документов...")
-            analysis_results = self.searcher.search_in_documents(documents, keywords)
+            analysis_results = self.searcher.search_in_documents(
+                documents, keywords, update_progress
+            )
 
             self.root.after(0, lambda: show_results(documents, analysis_results))
 
@@ -661,7 +663,7 @@ class ProcurementApp:
                 )
                 return
 
-            name = doc.get("name") or "document"
+            name = doc.get("filename") or doc.get("name") or "document"
             # Определяем расширение
             suffix = ""
             if "." in name:

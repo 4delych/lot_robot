@@ -1,7 +1,13 @@
+import os
+import sys
 import time
 import re
 import logging
-from urllib.parse import urljoin, urlparse, parse_qs
+import zipfile
+import html
+import tempfile
+import locale
+from urllib.parse import urljoin, urlparse, parse_qs, unquote
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -23,6 +29,18 @@ try:
     import xlrd
 except ImportError:
     xlrd = None
+
+try:
+    import pythoncom  # type: ignore
+except ImportError:
+    pythoncom = None  # type: ignore
+
+try:
+    import win32com.client as win32_client  # type: ignore
+    from win32com.client import constants as win32_constants  # type: ignore
+except ImportError:
+    win32_client = None  # type: ignore
+    win32_constants = None
 
 from config import CONFIG, PURCHASE_STAGES, LAWS
 
@@ -547,10 +565,26 @@ class ProcurementSearcher:
                     doc_response.raise_for_status()
 
                     content = doc_response.content
+                    display_name = self._normalize_filename(doc.get("name"))
+
+                    # Пытаемся получить реальное имя файла из заголовков ответа или URL
+                    real_name = self._guess_real_filename(
+                        doc_response, display_name, doc["url"]
+                    )
+
+                    # Имя, которое показываем в UI
+                    final_name = real_name or display_name
+                    if not final_name:
+                        final_name = self._normalize_filename(
+                            os.path.basename(urlparse(doc["url"]).path)
+                        )
+                    if not final_name:
+                        final_name = "document"
 
                     downloaded_docs.append(
                         {
-                            "name": doc["name"],
+                            "name": final_name,
+                            "filename": real_name or final_name,
                             "content": content,
                             "size": len(content),
                             "url": doc["url"],
@@ -561,7 +595,11 @@ class ProcurementSearcher:
                     )
 
                     logger.info(
-                        f"Successfully downloaded: {doc['name']} ({len(content)} bytes)"
+                        "Successfully downloaded: display=%r, real=%r, final=%r, size=%s bytes",
+                        display_name,
+                        real_name,
+                        final_name,
+                        len(content),
                     )
 
                     time.sleep(0.5)  # Задержка между запросами
@@ -659,11 +697,20 @@ class ProcurementSearcher:
 
         return f"document_{int(time.time())}"
 
-    def search_in_documents(self, documents, keywords):
+    def search_in_documents(self, documents, keywords, progress_callback=None):
         """Ищет ключевые слова в документах."""
         results = []
+        total = len(documents)
 
-        for doc in documents:
+        logger.info(
+            "Начат анализ документов: всего %s, ключевые слова: %s",
+            total,
+            ", ".join(map(str, keywords)),
+        )
+
+        for idx, doc in enumerate(documents, start=1):
+            filename = self._determine_document_filename(doc)
+            filename_l = filename.lower()
             doc_results = {
                 "document_name": doc["name"],
                 "size": doc["size"],
@@ -672,17 +719,72 @@ class ProcurementSearcher:
                 "match_count": 0,
             }
 
+            if progress_callback:
+                try:
+                    progress_callback(
+                        f"Анализ документа {idx}/{total}: {doc['name'][:60]}..."
+                    )
+                except Exception:
+                    # Не даём GUI-ошибкам завалить анализ
+                    pass
+
+            logger.info(
+                "Анализ документа %s/%s: name=%r, url=%r, filename_for_parser=%r",
+                idx,
+                total,
+                doc.get("name"),
+                doc.get("url"),
+                filename,
+            )
+
             try:
                 content_text = self._extract_text_from_content(
-                    doc["content"], doc["name"], doc.get("content_type", "")
+                    doc["content"], filename, doc.get("content_type", "")
                 )
 
-                # Ищем ключевые слова
-                for keyword in keywords:
-                    keyword_lower = keyword.lower().strip()
-                    if keyword_lower and keyword_lower in content_text.lower():
-                        doc_results["matches"].append(keyword)
-                        doc_results["match_count"] += 1
+                if idx == 1:
+                    # для отладки: покажем фрагмент извлечённого текста первого документа
+                    logger.info(
+                        "Пример извлечённого текста (первые 500 символов) из %r: %r",
+                        doc.get("name"),
+                        content_text[:500],
+                    )
+
+                logger.debug(
+                    "Извлечено %s символов текста из документа %r",
+                    len(content_text),
+                    doc.get("name"),
+                )
+
+                # Для Word‑документов используем более точный поиск по словам
+                if filename_l.endswith(".docx") or filename_l.endswith(".doc"):
+                    matched, match_count = self._find_word_matches_in_text(
+                        content_text, keywords
+                    )
+                    logger.info(
+                        "Совпадения в Word‑документе %r: найдено %s, ключевые слова: %s",
+                        doc.get("name"),
+                        match_count,
+                        matched,
+                    )
+                    doc_results["matches"].extend(matched)
+                    doc_results["match_count"] += match_count
+                else:
+                    # Для остальных форматов оставляем прежний простой поиск подстроки
+                    lower_text = content_text.lower()
+                    for keyword in keywords:
+                        keyword_lower = keyword.lower().strip()
+                        if keyword_lower and keyword_lower in lower_text:
+                            doc_results["matches"].append(keyword)
+                            doc_results["match_count"] += 1
+
+                    if doc_results["match_count"]:
+                        logger.info(
+                            "Совпадения в документе %r: найдено %s, ключевые слова: %s",
+                            doc.get("name"),
+                            doc_results["match_count"],
+                            doc_results["matches"],
+                        )
 
                 # Добавляем контекст для первых совпадений
                 if doc_results["matches"]:
@@ -697,9 +799,68 @@ class ProcurementSearcher:
                 results.append(doc_results)
                 continue
 
+        logger.info(
+            "Анализ документов завершён. Документов: %s, с совпадениями: %s",
+            len(results),
+            sum(1 for r in results if r["matches"]),
+        )
+
         # Сортируем по количеству совпадений
         results.sort(key=lambda x: x["match_count"], reverse=True)
         return results
+
+    def _determine_document_filename(self, doc: dict) -> str:
+        """
+        Пытается определить реальное имя файла:
+        - сначала используем то, что вывели в UI (doc['name'])
+        - если расширения нет, пробуем взять basename из URL
+        """
+        name = (doc.get("filename")
+                or doc.get("name")
+                or "").strip()
+        if "." in os.path.basename(name):
+            return name
+
+        url = doc.get("url") or ""
+        try:
+            path = urlparse(url).path
+            candidate = os.path.basename(path)
+            if candidate:
+                return candidate
+        except Exception:
+            pass
+
+        # Фолбэк — оставляем оригинальное имя или генерируем
+        return name or f"document_{int(time.time())}"
+
+    def _find_word_matches_in_text(self, text: str, keywords, min_len: int = 2):
+        """
+        Более аккуратный поиск по словам в тексте, в первую очередь для Word‑документов.
+
+        - Использует регулярные выражения с границами слов (\b) и учётом юникода.
+        - Игнорирует регистр.
+        - Для каждого ключевого слова увеличивает счётчик на количество найденных вхождений.
+        """
+        if not text:
+            return [], 0
+
+        text_normalized = " ".join(str(text).split())
+        total_count = 0
+        matched_keywords = []
+
+        for raw_kw in keywords:
+            kw = (raw_kw or "").strip()
+            if not kw or len(kw) < min_len:
+                continue
+
+            # Экранируем спецсимволы, чтобы искать именно текст, а не паттерн regex
+            pattern = r"\b" + re.escape(kw) + r"\b"
+            matches = re.findall(pattern, text_normalized, flags=re.IGNORECASE)
+            if matches:
+                matched_keywords.append(raw_kw)
+                total_count += len(matches)
+
+        return matched_keywords, total_count
 
     def _extract_text_from_content(self, content, filename, content_type):
         """Извлекает текст из содержимого документа с учётом формата."""
@@ -707,13 +868,32 @@ class ProcurementSearcher:
         ctype = (content_type or "").lower()
 
         try:
+            # 0. Если это ZIP‑контейнер (OOXML: docx/xlsx и т.п.) — пробуем как DOCX
+            #    Независимо от расширения файла, так как на сайте часто путают .doc и .docx.
+            if content[:2] == b"PK":
+                text = self._extract_text_from_docx(content)
+                if text:
+                    return text
+
             # 1. Обычный текст
             if filename_l.endswith(".txt") or "text/" in ctype:
                 return content.decode("utf-8", errors="ignore")
 
             # 2. DOCX
-            if filename_l.endswith(".docx") or "officedocument.wordprocessingml" in ctype:
+            if (
+                    filename_l.endswith(".docx")
+                    or "officedocument.wordprocessingml" in ctype
+            ):
                 text = self._extract_text_from_docx(content)
+                if text:
+                    return text
+
+            # 2.1. Старые DOC (часто RTF или HTML внутри .doc)
+            if (
+                    filename_l.endswith(".doc")
+                    and not filename_l.endswith(".docx")
+            ) or "msword" in ctype:
+                text = self._extract_text_from_doc(content)
                 if text:
                     return text
 
@@ -730,7 +910,8 @@ class ProcurementSearcher:
                     return text
 
             # 5. Всё остальное (PDF, DOC, RTF и т.п.) — грубый универсальный метод
-            text = content.decode("latin-1", errors="ignore")
+            # Сначала пробуем UTF-8, чтобы не сломать кириллицу, даже если формат распознан неверно.
+            text = content.decode("utf-8", errors="ignore")
             text = re.sub(r"[^\x20-\x7E\xC0-\xFF\n\r\t]", " ", text)
             text = re.sub(r"\s+", " ", text)
             return text
@@ -742,33 +923,261 @@ class ProcurementSearcher:
 
     def _extract_text_from_docx(self, content: bytes) -> str:
         """Извлекает текст из .docx с помощью python-docx."""
-        if Document is None:
-            logger.warning("python-docx не установлен, использую простой декодер")
-            return ""
+        # 1) Основной путь — через python-docx (если установлен)
+        if Document is not None:
+            try:
+                doc = Document(BytesIO(content))
+                parts = []
 
+                # Параграфы
+                for p in doc.paragraphs:
+                    text = p.text.strip()
+                    if text:
+                        parts.append(text)
+
+                # Таблицы
+                for table in doc.tables:
+                    for row in table.rows:
+                        row_text = " ".join(
+                            (cell.text or "").strip() for cell in row.cells if cell.text
+                        )
+                        if row_text:
+                            parts.append(row_text)
+
+                return "\n".join(parts)
+            except Exception as e:
+                logger.warning(f"Не удалось извлечь текст из DOCX через python-docx: {e}")
+
+        # 2) Запасной путь — разбираем .docx как ZIP и достаём word/document.xml
         try:
-            doc = Document(BytesIO(content))
-            parts = []
-
-            # Параграфы
-            for p in doc.paragraphs:
-                text = p.text.strip()
-                if text:
-                    parts.append(text)
-
-            # Таблицы
-            for table in doc.tables:
-                for row in table.rows:
-                    row_text = " ".join(
-                        (cell.text or "").strip() for cell in row.cells if cell.text
-                    )
-                    if row_text:
-                        parts.append(row_text)
-
-            return "\n".join(parts)
+            with zipfile.ZipFile(BytesIO(content)) as zf:
+                with zf.open("word/document.xml") as doc_xml:
+                    xml_bytes = doc_xml.read()
+            xml_text = xml_bytes.decode("utf-8", errors="ignore")
+            # Убираем XML/HTML-теги и декодируем сущности (&amp; и т.п.)
+            xml_text = html.unescape(re.sub(r"<[^>]+>", " ", xml_text))
+            xml_text = re.sub(r"\s+", " ", xml_text)
+            return xml_text.strip()
         except Exception as e:
-            logger.warning(f"Не удалось извлечь текст из DOCX: {e}")
+            logger.warning(f"Не удалось извлечь текст из DOCX через zipfile: {e}")
             return ""
+
+    def _guess_real_filename(self, response, display_name: str | None, url: str) -> str:
+        """
+        Определяет реальное имя файла по следующему приоритету:
+        1) filename / filename* в заголовке Content-Disposition
+        2) basename из URL (если есть расширение)
+        3) display_name (как в ссылке на сайте)
+        """
+        # 1. Content-Disposition
+        cd = response.headers.get("content-disposition", "") or ""
+        cd_lower = cd.lower()
+        filename = ""
+
+        # filename* (RFC 5987, например: filename*=UTF-8''%D0%90%D0%BA%D1%82.docx)
+        if "filename*=" in cd_lower:
+            try:
+                part = cd.split("filename*=", 1)[1].split(";", 1)[0].strip()
+                if part.lower().startswith("utf-8''"):
+                    part = part[8:]
+                part = part.strip('";')
+                filename = unquote(part)
+            except Exception:
+                filename = ""
+
+        # обычный filename="name.ext"
+        if not filename and "filename=" in cd_lower:
+            try:
+                part = cd.split("filename=", 1)[1].split(";", 1)[0].strip()
+                filename = part.strip('";')
+            except Exception:
+                filename = ""
+
+        # 2. basename из URL, если в нём есть расширение
+        if not filename:
+            try:
+                path = urlparse(url).path
+                base = os.path.basename(path)
+                if "." in base:
+                    filename = base
+            except Exception:
+                filename = ""
+
+        # 3. display_name как есть
+        if not filename:
+            filename = (display_name or "").strip()
+
+        return self._normalize_filename(filename or "document")
+
+    def _normalize_filename(self, name: str | None) -> str:
+        """Приводит имя файла к удобному виду и исправляет типичный mojibake."""
+        if not name:
+            return ""
+
+        cleaned = (name or "").strip().strip('"').replace("\\", "/")
+        cleaned = cleaned.split("/")[-1]
+        if not cleaned:
+            return ""
+
+        if self._looks_like_mojibake(cleaned):
+            for encoding in ("utf-8", "cp1251"):
+                try:
+                    cleaned = cleaned.encode("latin-1").decode(encoding)
+                    break
+                except Exception:
+                    continue
+
+        return cleaned.strip()
+
+    def _looks_like_mojibake(self, text: str) -> bool:
+        """Пытается определить, искажено ли имя файла (Ð, Ñ, Ã и т.п.)."""
+        if not text:
+            return False
+        mojibake_markers = ("Ð", "Ñ", "Ã", "Ò", "Â")
+        return any(marker in text for marker in mojibake_markers)
+
+    def _extract_text_from_doc(self, content: bytes) -> str:
+        """
+        Пытается извлечь текст из старого .doc.
+
+        Частые варианты на гос-сайтах:
+        - RTF, сохранённый как .doc
+        - HTML, сохранённый как .doc
+        - бинарный DOC, где текстовые фрагменты всё равно можно частично вытащить декодированием.
+        """
+        header = content[:2048]
+
+        # 0) Если установлен Microsoft Word и доступен win32com — сначала пробуем извлечь текст через него.
+        #    Это самый надёжный способ для «настоящих» бинарных DOC, независимо от сигнатуры.
+        if self._can_use_win32_word():
+            text = self._extract_text_from_doc_with_word(content)
+            if text:
+                return text
+
+        # 1) RTF внутри .doc
+        if b"{\\rtf" in header.lower():
+            try:
+                # В RTF для русских документов часто используется cp1251
+                txt = content.decode("cp1251", errors="ignore")
+
+                # Преобразуем последовательности \'hh в символы cp1251
+                def _rtf_hex_to_char(match):
+                    try:
+                        byte_val = int(match.group(1), 16)
+                        return bytes([byte_val]).decode("cp1251", errors="ignore")
+                    except Exception:
+                        return ""
+
+                txt = re.sub(r"\\'([0-9a-fA-F]{2})", lambda m: _rtf_hex_to_char(m), txt)
+
+                # Убираем управляющие последовательности RTF и фигурные скобки
+                txt = re.sub(r"\\[a-zA-Z]+\d*", " ", txt)  # команды \b, \par, \fs20 и т.п.
+                txt = re.sub(r"[{}]", " ", txt)
+                txt = html.unescape(txt)
+                txt = re.sub(r"\s+", " ", txt)
+                return txt.strip()
+            except Exception as e:
+                logger.warning(f"Не удалось извлечь текст из RTF внутри DOC: {e}")
+
+        # 2) HTML внутри .doc
+        if b"<html" in header.lower() or b"<body" in header.lower():
+            try:
+                # Пробуем cp1251, затем UTF-8
+                try:
+                    html_text = content.decode("cp1251")
+                except UnicodeDecodeError:
+                    html_text = content.decode("utf-8", errors="ignore")
+
+                soup = BeautifulSoup(html_text, "html.parser")
+                txt = soup.get_text(separator=" ", strip=True)
+                txt = re.sub(r"\s+", " ", txt)
+                return txt.strip()
+            except Exception as e:
+                logger.warning(f"Не удалось извлечь HTML-текст из DOC: {e}")
+
+        # 3) Бинарный DOC — грубая попытка вытащить видимый текст
+        try:
+            # Сначала cp1251, чтобы не сломать кириллицу
+            txt = content.decode("cp1251", errors="ignore")
+            # Оставляем только печатные символы и пробелы
+            txt = re.sub(r"[^\x20-\x7E\xC0-\xFF\n\r\t]", " ", txt)
+            txt = re.sub(r"\s+", " ", txt)
+            return txt.strip()
+        except Exception as e:
+            logger.warning(f"Не удалось извлечь текст из бинарного DOC: {e}")
+            return ""
+
+    def _can_use_win32_word(self) -> bool:
+        return (
+                sys.platform.startswith("win")
+                and win32_client is not None
+                and win32_constants is not None
+                and pythoncom is not None
+        )
+
+    def _extract_text_from_doc_with_word(self, content: bytes) -> str:
+        """Использует установленный Microsoft Word (через win32com) для извлечения текста из .doc."""
+        temp_doc = None
+        temp_txt = None
+        word = None
+        try:
+            pythoncom.CoInitialize()
+            temp = tempfile.NamedTemporaryFile(delete=False, suffix=".doc")
+            temp.write(content)
+            temp_doc = temp.name
+            temp.close()
+
+            temp_txt = temp_doc + ".txt"
+
+            word = win32_client.Dispatch("Word.Application")  # type: ignore
+            word.Visible = False
+
+            doc = word.Documents.Open(temp_doc)  # type: ignore
+            wd_format_text = getattr(win32_constants, "wdFormatText", 2)
+            doc.SaveAs(temp_txt, FileFormat=wd_format_text)  # type: ignore
+            doc.Close(False)  # type: ignore
+
+            with open(temp_txt, "rb") as f:
+                raw = f.read()
+
+            encodings_to_try = [
+                "utf-8",
+                locale.getpreferredencoding(False) or "cp1251",
+                "cp1251",
+            ]
+            text = ""
+            for enc in encodings_to_try:
+                try:
+                    text = raw.decode(enc)
+                    break
+                except Exception:
+                    continue
+            if not text:
+                text = raw.decode("latin-1", errors="ignore")
+
+            return " ".join(text.split())
+
+        except Exception as e:
+            logger.warning(f"Не удалось извлечь текст из DOC через Word COM: {e}")
+            return ""
+        finally:
+            if word:
+                try:
+                    word.Quit()
+                except Exception:
+                    pass
+            if pythoncom is not None:
+                try:
+                    pythoncom.CoUninitialize()
+                except Exception:
+                    pass
+            for path in (temp_doc, temp_txt):
+                if not path:
+                    continue
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
 
     def _extract_text_from_xlsx(self, content: bytes) -> str:
         """Извлекает текст из .xlsx/.xlsm с помощью openpyxl."""
