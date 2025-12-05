@@ -756,13 +756,17 @@ class ProcurementSearcher:
                     doc.get("name"),
                 )
 
-                # Для Word‑документов используем более точный поиск по словам
-                if filename_l.endswith(".docx") or filename_l.endswith(".doc"):
+                # Для Word‑документов и Excel используем более точный поиск по словам
+                if (filename_l.endswith(".docx") or filename_l.endswith(".doc") or
+                    filename_l.endswith((".xlsx", ".xlsm", ".xltx", ".xltm")) or
+                    filename_l.endswith(".xls")):
                     matched, match_count = self._find_word_matches_in_text(
                         content_text, keywords
                     )
+                    doc_type = "Word" if filename_l.endswith((".docx", ".doc")) else "Excel"
                     logger.info(
-                        "Совпадения в Word‑документе %r: найдено %s, ключевые слова: %s",
+                        "Совпадения в %s‑документе %r: найдено %s, ключевые слова: %s",
+                        doc_type,
                         doc.get("name"),
                         match_count,
                         matched,
@@ -868,12 +872,28 @@ class ProcurementSearcher:
         ctype = (content_type or "").lower()
 
         try:
-            # 0. Если это ZIP‑контейнер (OOXML: docx/xlsx и т.п.) — пробуем как DOCX
-            #    Независимо от расширения файла, так как на сайте часто путают .doc и .docx.
+            # 0. Если это ZIP‑контейнер (OOXML: docx/xlsx и т.п.) — определяем тип по содержимому
+            #    Независимо от расширения файла, так как на сайте часто путают форматы.
             if content[:2] == b"PK":
-                text = self._extract_text_from_docx(content)
-                if text:
-                    return text
+                # Проверяем, что это за OOXML формат
+                try:
+                    with zipfile.ZipFile(BytesIO(content)) as zf:
+                        file_list = zf.namelist()
+                        # XLSX содержит xl/workbook.xml или xl/sharedStrings.xml
+                        if any(f.startswith("xl/") for f in file_list):
+                            text = self._extract_text_from_xlsx(content)
+                            if text:
+                                return text
+                        # DOCX содержит word/document.xml
+                        elif any(f.startswith("word/") for f in file_list):
+                            text = self._extract_text_from_docx(content)
+                            if text:
+                                return text
+                except Exception:
+                    # Если не удалось определить, пробуем как DOCX (более частый случай)
+                    text = self._extract_text_from_docx(content)
+                    if text:
+                        return text
 
             # 1. Обычный текст
             if filename_l.endswith(".txt") or "text/" in ctype:
@@ -1182,46 +1202,74 @@ class ProcurementSearcher:
     def _extract_text_from_xlsx(self, content: bytes) -> str:
         """Извлекает текст из .xlsx/.xlsm с помощью openpyxl."""
         if load_workbook is None:
-            logger.warning("openpyxl не установлен, использую простой декодер")
+            logger.warning("openpyxl не установлен, невозможно извлечь текст из XLSX")
             return ""
 
         try:
             wb = load_workbook(BytesIO(content), data_only=True, read_only=True)
             parts = []
+            total_cells = 0
 
             for ws in wb.worksheets:
+                sheet_name = ws.title
+                logger.debug(f"Обработка листа Excel: {sheet_name}")
+                
                 for row in ws.iter_rows():
                     row_vals = []
                     for cell in row:
                         v = cell.value
                         if v is None:
                             continue
-                        row_vals.append(str(v))
+                        # Преобразуем значение в строку, обрабатывая даты и числа
+                        if isinstance(v, (int, float)):
+                            row_vals.append(str(v))
+                        elif isinstance(v, str):
+                            row_vals.append(v.strip())
+                        else:
+                            row_vals.append(str(v))
+                        total_cells += 1
+                    
                     if row_vals:
                         parts.append(" ".join(row_vals))
 
-            return "\n".join(parts)
+            result = "\n".join(parts)
+            logger.debug(f"Извлечено {len(parts)} строк из {len(wb.worksheets)} листов Excel, всего ячеек: {total_cells}")
+            return result
         except Exception as e:
             logger.warning(f"Не удалось извлечь текст из XLSX: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
             return ""
 
     def _extract_text_from_xls(self, content: bytes) -> str:
         """Извлекает текст из .xls с помощью xlrd (если установлен)."""
         if xlrd is None:
-            logger.warning("xlrd не установлен, использую простой декодер")
+            logger.warning("xlrd не установлен, невозможно извлечь текст из XLS")
             return ""
         try:
             book = xlrd.open_workbook(file_contents=content)
             parts = []
+            total_cells = 0
+
             for sheet in book.sheets():
+                sheet_name = sheet.name
+                logger.debug(f"Обработка листа Excel (XLS): {sheet_name}")
+                
                 for rx in range(sheet.nrows):
                     row_vals = sheet.row_values(rx)
-                    row_vals = [str(v) for v in row_vals if v not in ("", None)]
+                    # Преобразуем значения в строки, пропуская пустые
+                    row_vals = [str(v).strip() for v in row_vals if v not in ("", None) and str(v).strip()]
                     if row_vals:
                         parts.append(" ".join(row_vals))
-            return "\n".join(parts)
+                        total_cells += len(row_vals)
+            
+            result = "\n".join(parts)
+            logger.debug(f"Извлечено {len(parts)} строк из {len(book.sheets())} листов Excel (XLS), всего ячеек: {total_cells}")
+            return result
         except Exception as e:
             logger.warning(f"Не удалось извлечь текст из XLS: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
             return ""
 
 
