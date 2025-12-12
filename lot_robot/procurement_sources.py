@@ -298,15 +298,12 @@ class TektorgSource(ProcurementSource):
         if min_price is not None:
             min_val = self._to_int_or_none(min_price)
             if min_val is not None:
-                # Форматируем с пробелами для разделения тысяч: 200000 -> "200 000"
-                # Но в URL нужно использовать + вместо пробелов
-                price_str = f"{min_val:,}".replace(",", " ").replace(" ", "+")
-                params["sumPrice_start"] = price_str
+                params["sumPrice_start"] = str(min_val)
+
         if max_price is not None:
             max_val = self._to_int_or_none(max_price)
             if max_val is not None:
-                price_str = f"{max_val:,}".replace(",", " ").replace(" ", "+")
-                params["sumPrice_end"] = price_str
+               params["sumPrice_end"] = str(max_val)
 
         # Status - формат: "Приём заявок;Работа комиссии"
         # Важно: если purchase_stage указан, используем только его, иначе все статусы
@@ -358,43 +355,55 @@ class TektorgSource(ProcurementSource):
         soup = BeautifulSoup(html_content, "html.parser")
         results = []
 
-        # Ищем ссылки на процедуры - более точный поиск
-        # Ссылки вида: /44-fz/procedures/12345678 или /procedures/12345678
-        all_links = soup.find_all("a", href=True)
-        procedure_links = []
-        seen_hrefs = set()
+        # Ищем контейнеры лотов по классу gccepd (элемент с названием)
+        # Класс может быть полным или частичным из-за динамической генерации
+        lot_containers = []
         
-        for link in all_links:
-            href = link.get("href", "").strip()
-            if not href:
-                continue
-            
-            # Проверяем, что это ссылка на процедуру (содержит ID)
-            if "/procedures/" in href:
-                # Извлекаем ID процедуры
-                parts = href.split("/procedures/")
-                if len(parts) > 1:
-                    procedure_id = parts[1].split("/")[0].split("?")[0]
-                    # ID должен быть числом
-                    if procedure_id and procedure_id.isdigit() and href not in seen_hrefs:
-                        seen_hrefs.add(href)
-                        procedure_links.append(link)
+        # Пробуем найти по классу gccepd
+        containers_by_class = soup.find_all(class_=lambda x: x and 'gccepd' in ' '.join(x) if isinstance(x, list) else 'gccepd' in str(x))
+        
+        if not containers_by_class:
+            # Если не нашли по gccepd, ищем по структуре - элементы с ссылками на процедуры
+            all_links = soup.find_all("a", href=True)
+            for link in all_links:
+                href = link.get("href", "").strip()
+                if "/procedures/" in href:
+                    parts = href.split("/procedures/")
+                    if len(parts) > 1:
+                        procedure_id = parts[1].split("/")[0].split("?")[0]
+                        if procedure_id and procedure_id.isdigit():
+                            # Ищем родительский контейнер лота
+                            parent = link.find_parent()
+                            if parent and parent not in lot_containers:
+                                lot_containers.append(parent)
+        else:
+            # Нашли по классу - берем родительские контейнеры
+            for container in containers_by_class:
+                # Ищем родительский контейнер, который содержит весь лот
+                parent = container.find_parent()
+                if parent and parent not in lot_containers:
+                    lot_containers.append(parent)
 
-        if not procedure_links:
-            logger.warning("No procedure links found on tektorg.ru page")
+        if not lot_containers:
+            logger.warning("No lot containers found on tektorg.ru page")
             # Сохраняем HTML для отладки
             with open("debug_tektorg_page.html", "w", encoding="utf-8") as f:
                 f.write(soup.prettify())
             return []
 
-        logger.info(f"Found {len(procedure_links)} procedure links on tektorg.ru")
+        logger.info(f"Found {len(lot_containers)} lot containers on tektorg.ru")
 
-        for i, link in enumerate(procedure_links):
+        for i, container in enumerate(lot_containers):
             if progress_callback:
-                progress_callback(f"Обработка результата {i + 1} из {len(procedure_links)}...")
+                progress_callback(f"Обработка результата {i + 1} из {len(lot_containers)}...")
 
             try:
-                href = link.get("href", "").strip()
+                # Ищем ссылку на процедуру в контейнере
+                link_el = container.find("a", href=lambda x: x and "/procedures/" in x)
+                if not link_el:
+                    continue
+                
+                href = link_el.get("href", "").strip()
                 
                 # Полный URL
                 if href.startswith("/"):
@@ -404,13 +413,8 @@ class TektorgSource(ProcurementSource):
                 else:
                     continue
 
-                # Название - ищем более тщательно
-                title = self._extract_title_tektorg(link)
-                if not title or len(title.strip()) < 5:
-                    # Если не нашли в ссылке, ищем в родительском контейнере
-                    parent = link.find_parent()
-                    if parent:
-                        title = self._extract_title_from_container(parent)
+                # Название - ищем после элемента с классом gccepd
+                title = self._extract_title_tektorg_new(container)
                 
                 if not title or len(title.strip()) < 5:
                     logger.warning(f"Could not extract title for {full_url}, skipping")
@@ -419,8 +423,11 @@ class TektorgSource(ProcurementSource):
                 # Очищаем название от лишних символов
                 title = " ".join(title.split())
 
-                # Цена - ищем в контейнере карточки
-                price = self._extract_price_tektorg(link)
+                # Цена - ищем после элемента с классом cLruXa
+                price = self._extract_price_tektorg_new(container)
+                if price == 0.0:
+                    # Фолбэк - используем старый метод
+                    price = self._extract_price_tektorg(link_el)
 
                 results.append({
                     "Название": title.strip(),
@@ -436,21 +443,29 @@ class TektorgSource(ProcurementSource):
         logger.info(f"Successfully parsed {len(results)} results from tektorg.ru")
         return results
 
-    def _extract_title_tektorg(self, lot_element):
-        """Извлекает название из элемента tektorg.ru."""
-        # Пробуем найти текст в самом элементе
-        text = lot_element.get_text(separator=" ", strip=True)
+    def _extract_title_tektorg_new(self, container):
+        """Извлекает название из контейнера лота tektorg.ru."""
+        # Ищем элемент с классом gccepd (название лота)
+        title_elements = container.find_all(class_=lambda x: x and 'gccepd' in ' '.join(x) if isinstance(x, list) else 'gccepd' in str(x))
+        
+        if title_elements:
+            for title_el in title_elements:
+                text = title_el.get_text(separator=" ", strip=True)
+                if text and len(text) > 10:
+                    return text[:200]
+        
+        # Если не нашли по классу, ищем в ссылке на процедуру
+        link_el = container.find("a", href=lambda x: x and "/procedures/" in x)
+        if link_el:
+            text = link_el.get_text(separator=" ", strip=True)
+            if text and len(text) > 10:
+                return text[:200]
+        
+        # Фолбэк - берем весь текст контейнера
+        text = container.get_text(separator=" ", strip=True)
         if text and len(text) > 10:
-            # Убираем лишние пробелы и берем первые 200 символов
-            text = " ".join(text.split())
             return text[:200]
-
-        # Ищем в атрибутах (title, aria-label и т.д.)
-        for attr in ["title", "aria-label", "data-title"]:
-            attr_text = lot_element.get(attr, "").strip()
-            if attr_text and len(attr_text) > 10:
-                return attr_text[:200]
-
+        
         return None
 
     def _extract_title_from_container(self, container):
@@ -481,33 +496,143 @@ class TektorgSource(ProcurementSource):
         return None
 
     def _extract_price_tektorg(self, lot_element):
-        """Извлекает цену из элемента tektorg.ru."""
-        # Ищем цену в родительских элементах
+        """Fallback: извлекает цену, но парсит через _parse_price_string (без кривого regex)."""
+        parent = lot_element.parent
+
+        # 1) пытаемся найти блок "Начальная цена"
+        for _ in range(6):
+            if not parent:
+                break
+
+            labels = parent.find_all(string=lambda t: t and "Начальная цена" in t)
+            for label in labels:
+                label_el = label.parent
+                candidate = None
+
+                sib = label_el.find_next_sibling()
+                if sib:
+                    candidate = sib.get_text(" ", strip=True)
+                else:
+                    candidate = label_el.get_text(" ", strip=True)
+
+                price = self._parse_price_string(candidate or "")
+                if price:
+                    return price
+
+            parent = parent.parent
+
+        # 2) общий поиск по возможным price/sum/cost элементам
         parent = lot_element.parent
         for _ in range(5):
             if not parent:
                 break
 
-            # Ищем элементы с ценой
             price_elements = parent.select("[class*='price'], [class*='sum'], [class*='cost']")
             for price_el in price_elements:
-                price_text = price_el.get_text(strip=True)
-                # Извлекаем числа
-                numbers = re.findall(r"[\d\s]+", price_text.replace(",", "."))
-                for num_str in numbers:
-                    try:
-                        # Убираем пробелы и преобразуем
-                        num_clean = num_str.replace(" ", "").replace("\xa0", "")
-                        if num_clean:
-                            price = float(num_clean)
-                            if price > 0:
-                                return price
-                    except ValueError:
-                        continue
+                price = self._parse_price_string(price_el.get_text(" ", strip=True) or "")
+                if price:
+                    return price
 
             parent = parent.parent
 
         return 0.0
+
+    def _extract_price_tektorg_new(self, container):
+        """Извлекает цену из контейнера лота tektorg.ru по классу cLruXa."""
+        # Ищем элемент с классом cLruXa (цена)
+        price_elements = container.find_all(class_=lambda x: x and 'cLruXa' in ' '.join(x) if isinstance(x, list) else 'cLruXa' in str(x))
+        
+        if price_elements:
+            for price_el in price_elements:
+                price_text = price_el.get_text(strip=True)
+                if price_text:
+                    price = self._parse_price_string(price_text)
+                    if price and price > 100:
+                        logger.debug(f"Found price {price} using cLruXa class (from '{price_text}')")
+                        return price
+        
+        # Если не нашли по классу, ищем по другим селекторам
+        price_selectors = [
+            "[class*='price']",
+            "[class*='sum']",
+            "[class*='cost']",
+            "[class*='amount']",
+            "[class*='value']",
+        ]
+        
+        for selector in price_selectors:
+            price_elements = container.select(selector)
+            for price_el in price_elements:
+                price_text = price_el.get_text(strip=True)
+                if not price_text:
+                    continue
+                
+                price = self._parse_price_string(price_text)
+                if price and price > 100:
+                    logger.debug(f"Found price {price} using selector {selector} (from '{price_text}')")
+                    return price
+
+        logger.debug("Could not extract price from container")
+        return 0.0
+
+    def _parse_price_string(self, price_text: str) -> float | None:
+        """
+        Нормально парсит цены вида:
+        - "1 324 350 ₽"     -> 1324350.0
+        - "598 819,20 ₽"    -> 598819.2
+        - "1.324.350 ₽"     -> 1324350.0      (точки = разделители тысяч)
+        - "598.819,20 ₽"    -> 598819.2       (точки = тысячи, запятая = дробь)
+        """
+        if not price_text:
+            return None
+
+        # оставляем только цифры и разделители
+        s = re.sub(r"[^\d\s.,\u00A0]", "", price_text)
+        s = s.replace("\u00A0", " ").strip()
+        if not s:
+            return None
+
+        # берём первый похожий на число фрагмент
+        m = re.search(r"\d[\d\s.,]*\d|\d", s)
+        if not m:
+            return None
+        num = m.group(0).replace(" ", "")
+
+        has_comma = "," in num
+        has_dot = "." in num
+
+        if has_comma and has_dot:
+            # десятичный разделитель — тот, что стоит ПОСЛЕДНИМ
+            if num.rfind(",") > num.rfind("."):
+                # 598.819,20 -> 598819.20
+                num = num.replace(".", "")
+                num = num.replace(",", ".")
+            else:
+                # 598,819.20 -> 598819.20
+                num = num.replace(",", "")
+                # точка остаётся десятичной
+        elif has_comma:
+            # если ровно одна запятая и после неё 1-2 цифры — это дробная часть
+            if num.count(",") == 1 and len(num.split(",")[1]) in (1, 2):
+                num = num.replace(",", ".")
+            else:
+                # иначе запятые = тысячи
+                num = num.replace(",", "")
+        elif has_dot:
+            # если точек несколько — почти наверняка это тысячи: 1.324.350
+            if num.count(".") > 1:
+                num = num.replace(".", "")
+            else:
+                # одна точка: если после неё 1-2 цифры -> дробь, иначе тысячи
+                after = num.split(".", 1)[1]
+                if len(after) not in (1, 2):
+                    num = num.replace(".", "")
+
+        try:
+            v = float(num)
+            return v if v > 0 else None
+        except ValueError:
+            return None
 
     def get_documents_url(self, lot_url: str) -> tuple[str, dict] | None:
         """Для tektorg.ru документы обычно на той же странице лота."""

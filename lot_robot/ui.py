@@ -38,7 +38,8 @@ class ProcurementApp:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(6, weight=1)
+        main_frame.rowconfigure(6, weight=0)  # блок документов не растягиваем
+        main_frame.rowconfigure(7, weight=1)  # растягиваем таблицу результатов
 
         # Input fields
         ttk.Label(main_frame, text="Ключевое слово:").grid(

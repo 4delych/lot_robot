@@ -23,28 +23,28 @@
   <script src="/epz/static/js/jquery_msgBox.js" type="text/javascript">
   </script>
   <script type="text/javascript">
-   $(window).ready(function() {
-      $('body').animate({opacity:'1'},300);
-    });
-      function sessionTimeOutMsg(){
-          $.msgBox({
-              type:"error",
-              content:"Время ожидания соединения истекло",
-              title: "Сообщение",
-              afterClose: function(result) {
-                  document.location.href = ""
-              }
-          });
-      }
-
-      var isRegisteredUserObozApp = Boolean("");
-      var sessionMaxInactiveInterval = "600";
-      $(document).ready(function(){
-          var notUsual = (($.cookie("usePoorVisionOption") == 'true') && $(".goodVisionLink").length == 0);
-          var notPoorVision = (($.cookie("usePoorVisionOption") != 'true') && $(".poorVisionLink").length == 0);
-          if (notUsual || notPoorVision){
-              location.reload();
-          }
+   $(window).ready(function() {
+      $('body').animate({opacity:'1'},300);
+    });
+      function sessionTimeOutMsg(){
+          $.msgBox({
+              type:"error",
+              content:"Время ожидания соединения истекло",
+              title: "Сообщение",
+              afterClose: function(result) {
+                  document.location.href = ""
+              }
+          });
+      }
+
+      var isRegisteredUserObozApp = Boolean("");
+      var sessionMaxInactiveInterval = "600";
+      $(document).ready(function(){
+          var notUsual = (($.cookie("usePoorVisionOption") == 'true') && $(".goodVisionLink").length == 0);
+          var notPoorVision = (($.cookie("usePoorVisionOption") != 'true') && $(".poorVisionLink").length == 0);
+          if (notUsual || notPoorVision){
+              location.reload();
+          }
       });
   </script>
   <script>
@@ -93,7 +93,7 @@
   <script src="/epz/static/js/jquery-migrate-3.0.1.min.js" type="text/javascript">
   </script>
   <script type="text/javascript">
-   var contextPath = "/epz/order/notice";
+   var contextPath = "/epz/order/notice";
       var epzMainPublicUrl = "/epz/main/public/";
   </script>
   <script src="/epz/static/js/checkNotice.js" type="text/javascript">
@@ -105,74 +105,74 @@
   <script src="/epz/static/js/generalChevron.js" type="text/javascript">
   </script>
   <script type="text/javascript">
-   epzCommonConfig.initCommonConfig({
-        contextPath: '/epz/order/notice',
-        smartSearchEnable: true,
-
-        urls: {
-            epzMainPublicUrl: '/epz/main/public/',
-            epzNsiUrl: '/epz/nsi/',
-            epzOrderUrl: '/epz/order/',
-            epzOrderPlanUrl: '/epz/orderplan/',
-            epzOrderClauseUrl: '/epz/orderclause/',
-            epzContractUrl: '/epz/contract/',
-            epzContractFz223Url: '/epz/contractfz223/',
-            epzContractReportingUrl: '/epz/contractreporting/',
-            epzCustomerReportsUrl: '/epz/customerreports/',
-            epzOrganizationUrl: '/epz/organization/',
-            epzDishonestSupplierUrl: '/epz/dishonestsupplier/',
-            epzComplaintUrl: '/epz/complaint/',
-            epzBankGuaranteeUrl: '/epz/bankguarantee/',
-            epzInspectionPlanUrl: '/epz/inspectionplan/',
-            epzUnscheduledInspectionUrl: '/epz/unscheduledinspection/',
-            epzControlResultUrl: '/epz/controlresult/',
-            epzDizkUrl: '/epz/dizk/',
-            epzEsUrl: '/analytics/hit/',
-            epzFarmUrl: '/epz/farm/'
-        }
+   epzCommonConfig.initCommonConfig({
+        contextPath: '/epz/order/notice',
+        smartSearchEnable: true,
+
+        urls: {
+            epzMainPublicUrl: '/epz/main/public/',
+            epzNsiUrl: '/epz/nsi/',
+            epzOrderUrl: '/epz/order/',
+            epzOrderPlanUrl: '/epz/orderplan/',
+            epzOrderClauseUrl: '/epz/orderclause/',
+            epzContractUrl: '/epz/contract/',
+            epzContractFz223Url: '/epz/contractfz223/',
+            epzContractReportingUrl: '/epz/contractreporting/',
+            epzCustomerReportsUrl: '/epz/customerreports/',
+            epzOrganizationUrl: '/epz/organization/',
+            epzDishonestSupplierUrl: '/epz/dishonestsupplier/',
+            epzComplaintUrl: '/epz/complaint/',
+            epzBankGuaranteeUrl: '/epz/bankguarantee/',
+            epzInspectionPlanUrl: '/epz/inspectionplan/',
+            epzUnscheduledInspectionUrl: '/epz/unscheduledinspection/',
+            epzControlResultUrl: '/epz/controlresult/',
+            epzDizkUrl: '/epz/dizk/',
+            epzEsUrl: '/analytics/hit/',
+            epzFarmUrl: '/epz/farm/'
+        }
     });
   </script>
  </head>
  <body class="cardLayout">
   <script type="text/javascript">
-   if ($.cookie('usePoorVisionOption') === 'true') {
-    var body = $('body');
-    var style = '';
-    var cookie = $.cookie('colorSpectrumForPoorVision');
-    if (cookie) {
-      body.addClass(cookie + 'ColorSpectrum');
-      switch (cookie) {
-        case 'white':
-          style = '#ffffff';
-          break;
-        case 'black':
-          style = '#000000';
-          break;
-        case 'blue':
-          style = '#9DD1FF';
-          break;
-        case 'brown':
-          style = '#442713';
-          break;
-        case 'biege':
-          style = '#F7F3D6';
-          break;
-        default:
-          break;
-      }
-      body.css({backgroundColor: style});
-    }
-
-    var fontZize = $.cookie('fontSizeForPoorVision');
-    if (fontZize) {
-      body.addClass('fontSizeForPoorVision' + fontZize);
-    }
+   if ($.cookie('usePoorVisionOption') === 'true') {
+    var body = $('body');
+    var style = '';
+    var cookie = $.cookie('colorSpectrumForPoorVision');
+    if (cookie) {
+      body.addClass(cookie + 'ColorSpectrum');
+      switch (cookie) {
+        case 'white':
+          style = '#ffffff';
+          break;
+        case 'black':
+          style = '#000000';
+          break;
+        case 'blue':
+          style = '#9DD1FF';
+          break;
+        case 'brown':
+          style = '#442713';
+          break;
+        case 'biege':
+          style = '#F7F3D6';
+          break;
+        default:
+          break;
+      }
+      body.css({backgroundColor: style});
+    }
+
+    var fontZize = $.cookie('fontSizeForPoorVision');
+    if (fontZize) {
+      body.addClass('fontSizeForPoorVision' + fontZize);
+    }
   }
   </script>
   <style>
-   .header-logo {
-        top: -5px;
-        background: none;
+   .header-logo {
+        top: -5px;
+        background: none;
     }
   </style>
   <div id="critical_notice">
@@ -1079,12 +1079,12 @@
    </div>
   </header>
   <script type="text/javascript">
-   $('#eis-advice').hover(
-        function () {
-            $('#eis-tooltiptext').css('visibility', 'visible');
-        },
-        function () {
-            $('#eis-tooltiptext').css('visibility', 'hidden');
+   $('#eis-advice').hover(
+        function () {
+            $('#eis-tooltiptext').css('visibility', 'visible');
+        },
+        function () {
+            $('#eis-tooltiptext').css('visibility', 'hidden');
         });
   </script>
   <header class="header header-bottom">
@@ -1370,73 +1370,73 @@
    </div>
   </header>
   <script type="text/javascript">
-   function selectCurrentMenuItem() {
-        var sectionSelector = '._' + getregistryName();
-
-        var fz44 = getURLParam('fz44'),
-            fz94 = getURLParam('fz44'),
-            fz223 = getURLParam('fz223'),
-            ppRf615 = getURLParam('fz44'),
-            documentSection = getURLParam('sectionId');
-
-        if ($(sectionSelector).length > 1) {
-            var selector = null;
-
-            $(sectionSelector).each(function () {
-                if ($(this).attr('data-law') !== undefined) {
-                    if (fz44 !== null && fz44 === 'on' && $(this).attr('data-law').trim() === 'FZ44') {selector = this; return true;}
-                    if (fz223 !== null && fz223 === 'on' && $(this).attr('data-law').trim() === 'FZ223') {selector = this; return true;}
-                    if (fz94 !== null && fz94 === 'on' && $(this).attr('data-law').trim() === 'FZ94') {selector = this; return true;}
-                    if (ppRf615 !== null && ppRf615 === 'on' && $(this).attr('data-law').trim() === 'PPRF615') {selector = this; return true;}
-                    if (documentSection !== null && documentSection !== '' && $(this).attr('data-law').trim() === documentSection) {selector = this; return true;}
-                }
-            });
-
-            if (selector !== null) {
-                if (!$(selector).parent().hasClass('parent-node'))
-                    $(selector).addClass('submenu-list__link--active');
-
-                $(selector).closest('li.main-item').css('border-bottom', '3px solid #0065dd');
-            }else{
-                $(sectionSelector).first().css('background-color', '#8c96ad');
-                $(sectionSelector).first().closest('li.main-item').css('border-bottom', '3px solid #0065dd');
-            }
-        } else {
-            if (!$(sectionSelector).parent().hasClass('parent-node') && checkStopListSelect(getregistryName()))
-                $(sectionSelector).addClass('submenu-list__link--active');
-
-            $(sectionSelector).closest('li.main-item').css('border-bottom', '3px solid #0065dd');
-        }
-    }
-
-    function checkStopListSelect(selector) {
-        var tempBitLink = window.location.pathname.split("/" + selector + "/");
-        return !(tempBitLink.length > 1 && tempBitLink[1].match("private"));
-    }
-
-    $(document).ready(function () {
-        selectCurrentMenuItem();
+   function selectCurrentMenuItem() {
+        var sectionSelector = '._' + getregistryName();
+
+        var fz44 = getURLParam('fz44'),
+            fz94 = getURLParam('fz44'),
+            fz223 = getURLParam('fz223'),
+            ppRf615 = getURLParam('fz44'),
+            documentSection = getURLParam('sectionId');
+
+        if ($(sectionSelector).length > 1) {
+            var selector = null;
+
+            $(sectionSelector).each(function () {
+                if ($(this).attr('data-law') !== undefined) {
+                    if (fz44 !== null && fz44 === 'on' && $(this).attr('data-law').trim() === 'FZ44') {selector = this; return true;}
+                    if (fz223 !== null && fz223 === 'on' && $(this).attr('data-law').trim() === 'FZ223') {selector = this; return true;}
+                    if (fz94 !== null && fz94 === 'on' && $(this).attr('data-law').trim() === 'FZ94') {selector = this; return true;}
+                    if (ppRf615 !== null && ppRf615 === 'on' && $(this).attr('data-law').trim() === 'PPRF615') {selector = this; return true;}
+                    if (documentSection !== null && documentSection !== '' && $(this).attr('data-law').trim() === documentSection) {selector = this; return true;}
+                }
+            });
+
+            if (selector !== null) {
+                if (!$(selector).parent().hasClass('parent-node'))
+                    $(selector).addClass('submenu-list__link--active');
+
+                $(selector).closest('li.main-item').css('border-bottom', '3px solid #0065dd');
+            }else{
+                $(sectionSelector).first().css('background-color', '#8c96ad');
+                $(sectionSelector).first().closest('li.main-item').css('border-bottom', '3px solid #0065dd');
+            }
+        } else {
+            if (!$(sectionSelector).parent().hasClass('parent-node') && checkStopListSelect(getregistryName()))
+                $(sectionSelector).addClass('submenu-list__link--active');
+
+            $(sectionSelector).closest('li.main-item').css('border-bottom', '3px solid #0065dd');
+        }
+    }
+
+    function checkStopListSelect(selector) {
+        var tempBitLink = window.location.pathname.split("/" + selector + "/");
+        return !(tempBitLink.length > 1 && tempBitLink[1].match("private"));
+    }
+
+    $(document).ready(function () {
+        selectCurrentMenuItem();
     });
   </script>
   <div class="cardWrapper outerWrapper">
    <div class="wrapper">
     <div class="cardHeaderBlock">
      <script type="text/javascript">
-      $(document).ready(function () {
-        var poorVisionSettingsBlock = $('.poorVisionSettingsBlock');
-
-        
-        
-        
-        var poorVisionLink = poorVisionSettingsBlock.find('.poorVisionLink');
-
-        poorVisionLink.click(function (e) {
-            e.preventDefault();
-            $.cookie('usePoorVisionOption', 'true', {path: '/', expires: 365*100});
-            location.reload();
-        });
-        
-        
+      $(document).ready(function () {
+        var poorVisionSettingsBlock = $('.poorVisionSettingsBlock');
+
+        
+        
+        
+        var poorVisionLink = poorVisionSettingsBlock.find('.poorVisionLink');
+
+        poorVisionLink.click(function (e) {
+            e.preventDefault();
+            $.cookie('usePoorVisionOption', 'true', {path: '/', expires: 365*100});
+            location.reload();
+        });
+        
+        
     });
      </script>
      <div class="poorVisionSettingsBlock">
@@ -1467,7 +1467,7 @@
           </svg>
          </span>
          <span class="navBreadcrumb__text">
-          № 0138300000425000957
+          № 0138300000425000885
          </span>
         </div>
        </div>
@@ -1482,7 +1482,7 @@
         </div>
        </div>
        <div class="breadcrumb__addition subscribeRss mt-4">
-        <a class="subscribeRss__link" href="/epz/order/notice/rss?regNumber=0138300000425000957" target="_blank">
+        <a class="subscribeRss__link" href="/epz/order/notice/rss?regNumber=0138300000425000885" target="_blank">
          Подписаться на RSS
         </a>
         <svg class="subscribeRss__icon" fill="none" height="12" viewbox="0 0 16 16" width="12" xmlns="http://www.w3.org/2000/svg">
@@ -1501,18 +1501,21 @@
           <div class="cardMainInfo__title d-flex text-truncate">
            44-ФЗ
            <span class="cardMainInfo__title distancedText ml-1">
-            Запрос котировок в электронной форме
+            Электронный аукцион
             <div class="d-inline-block" data-tooltip='&lt;span class="custom-tooltiptext"&gt;Закупка является централизованной&lt;/span&gt;'>
              <img alt="" class="icon-order-group" src="/epz/static/img/icons/icon_centralized.svg"/>
+            </div>
+            <div class="d-inline-block" data-tooltip='&lt;span class="custom-tooltiptext"&gt;Закупка является совместной&lt;/span&gt;'>
+             <img alt="" class="icon-order-group" src="/epz/static/img/icons/icon_group.svg"/>
             </div>
            </span>
           </div>
           <div class="blockIcon">
-           <a class="distancedText" data-modalup="" href="/epz/order/notice/printForm/listModal.html?regNumber=0138300000425000957">
+           <a class="distancedText" data-modalup="" href="/epz/order/notice/printForm/listModal.html?regNumber=0138300000425000885">
             <img alt="" src="/epz/static/img/icons/icon_key.svg">
             </img>
            </a>
-           <a href="/epz/order/notice/printForm/view.html?regNumber=0138300000425000957" target="_blank">
+           <a href="/epz/order/notice/printForm/view.html?regNumber=0138300000425000885" target="_blank">
             <img alt="" src="/epz/static/img/icons/icon_print_small.svg">
             </img>
            </a>
@@ -1521,11 +1524,11 @@
          <div class="cardMainInfo__status">
           <span class="cardMainInfo__purchaseLink distancedText">
            <a href="#" target="_blank">
-            № 0138300000425000957
+            № 0138300000425000885
            </a>
           </span>
           <span class="cardMainInfo__state distancedText">
-           Подача заявок
+           Определение поставщика завершено
           </span>
          </div>
         </div>
@@ -1535,7 +1538,7 @@
            Объект закупки
           </span>
           <span class="cardMainInfo__content">
-           Выполнение работ по содержанию улично-дорожной сети в г. Петропавловске-Камчатском в целях организации выполнения работ по содержанию проездов микрорайона "КП - Солнечная - ТЭЦ 2, Кутузовский, Кирпичики"
+           Мясо замороженное
           </span>
          </div>
          <div class="cardMainInfo__section">
@@ -1556,7 +1559,7 @@
           Начальная цена
          </span>
          <span class="cardMainInfo__content cost">
-          2 770 026,79 ₽
+          11 159 159,60 ₽
          </span>
         </div>
         <div class="date">
@@ -1566,7 +1569,7 @@
             Размещено
            </span>
            <span class="cardMainInfo__content">
-            05.12.2025
+            25.11.2025
            </span>
           </div>
           <div class="cardMainInfo__section col-6">
@@ -1574,7 +1577,7 @@
             Обновлено
            </span>
            <span class="cardMainInfo__content">
-            05.12.2025
+            12.12.2025
            </span>
           </div>
          </div>
@@ -1583,7 +1586,7 @@
            Окончание подачи заявок
           </span>
           <span class="cardMainInfo__content">
-           12.12.2025
+           11.12.2025
           </span>
          </div>
         </div>
@@ -1592,20 +1595,20 @@
         <div>
         </div>
         <div class="rel-links">
-         <a href="/epz/order/notice/view/common-info.html?regNumber=0138300000425000957#positionKTRU">
+         <a href="/epz/order/notice/view/common-info.html?regNumber=0138300000425000885#positionKTRU">
           Позиция КТРУ
          </a>
-         <a class="cursorPointer" onclick="openPlanGraphSearchUrl('0138300000425000957')">
+         <a class="cursorPointer" onclick="openPlanGraphSearchUrl('0138300000425000885')">
           Позиция
                         плана-графика
          </a>
-         <a class="cursorPointer" onclick="openContractUrl('0138300000425000957')">
+         <a class="cursorPointer" onclick="openContractUrl('0138300000425000885')">
           Контракт
          </a>
-         <a class="cursorPointer" onclick="openComplaintSearch('0138300000425000957')">
+         <a class="cursorPointer" onclick="openComplaintSearch('0138300000425000885')">
           Жалоба
          </a>
-         <a class="cursorPointer" onclick="openUnscheduledInspection('0138300000425000957')">
+         <a class="cursorPointer" onclick="openUnscheduledInspection('0138300000425000885')">
           Внеплановая
                     проверка
          </a>
@@ -1657,13 +1660,16 @@
      </script>
      <div class="container">
       <div class="tabsNav d-flex align-items-end">
-       <a class="tabsNav__item" href="/epz/order/notice/zk20/view/common-info.html?regNumber=0138300000425000957">
+       <a class="tabsNav__item" href="/epz/order/notice/ea20/view/common-info.html?regNumber=0138300000425000885">
         Общая информация
        </a>
-       <a class="tabsNav__item tabsNav__item_active" href="/epz/order/notice/zk20/view/documents.html?regNumber=0138300000425000957">
+       <a class="tabsNav__item tabsNav__item_active" href="/epz/order/notice/ea20/view/documents.html?regNumber=0138300000425000885">
         Документы
        </a>
-       <a class="tabsNav__item" href="/epz/order/notice/zk20/view/event-journal.html?regNumber=0138300000425000957">
+       <a class="tabsNav__item" href="/epz/order/notice/ea20/view/supplier-results.html?regNumber=0138300000425000885">
+        Результаты определения поставщика (подрядчика, исполнителя)
+       </a>
+       <a class="tabsNav__item" href="/epz/order/notice/ea20/view/event-journal.html?regNumber=0138300000425000885">
         Журнал событий
        </a>
       </div>
@@ -1697,20 +1703,20 @@
     <div class="container">
      <div class="col-sm-12 blockInfo">
       <h2 class="blockInfo__title">
-       Извещение, изменение извещения о проведении запроса котировок в электронной форме
+       Извещение, изменение извещения о проведении электронного аукциона
       </h2>
       <div class="row no-gutters notice-documents blockInfo__section first-row-active-documents closedInactiveDocuments borderNone">
        <div class="col-sm-6 b-r">
         <div class="row no-gutters">
          <div class="col-sm-2">
           <div class="float-left">
-           <a data-modalup="" href="/epz/order/notice/signview/listModal.html?entityType=notice&amp;entityId=41411014&amp;source=">
+           <a data-modalup="" href="/epz/order/notice/signview/listModal.html?entityType=notice&amp;entityId=41193518&amp;source=">
             <span class="icon icon-big icon-cryptoSign">
             </span>
            </a>
           </div>
           <div class="float-right">
-           <a href="/epz/order/notice/printForm/view.html?entityType=notice&amp;entityId=41411014&amp;source=" target="_blank" title="Печатная форма">
+           <a href="/epz/order/notice/printForm/view.html?entityType=notice&amp;entityId=41193518&amp;source=" target="_blank" title="Печатная форма">
             <span class="icon icon-big icon-print">
             </span>
            </a>
@@ -1720,7 +1726,7 @@
           <div class="col">
            <div class="section__value docName">
             <span class="">
-             Извещение о проведении запроса котировок в электронной форме от 05.12.2025 №0138300000425000957
+             Извещение о проведении электронного аукциона от 25.11.2025 №0138300000425000885
             </span>
            </div>
            <div class="row">
@@ -1729,7 +1735,7 @@
               Размещено
              </div>
              <div class="section__value">
-              05.12.2025 21:15
+              25.11.2025 16:48
               <span class="timeZoneName" title="Петропавловск-Камчатский, стандартное время">
                (МСК+9)
               </span>
@@ -1780,97 +1786,64 @@
          </div>
          <div class="attachment row">
           <div class="col clipText">
-           <a class="pWidth_840 vAlignMiddle margRight5 cryptoSignsSmall" data-modalup="" href="/epz/order/notice/signview/listModal.html?attachmentId=203902178">
-            <span class="icon icon-small icon-cryptoSign_small vAlignMiddle">
-            </span>
-           </a>
-           <img alt="Adobe Acrobat Document" class="vAlignMiddle margRight5" data-tooltip="&lt;span class='custom-tooltiptext'&gt;Adobe Acrobat Document&lt;/span&gt;" src="/epz/static/img/icons/type/pdf.svg">
-            <span class="section__value">
-             <a href="https://zakupki.gov.ru/44fz/filestore/public/1.0/download/priz/file.html?uid=76D460D50EDE44BAA64DBFB2FFB9050F" title="Обоснование_НМЦК.pdf">
-              Обоснование НМЦК
-             </a>
-            </span>
-           </img>
-          </div>
-         </div>
-         <div class="attachment row">
-          <div class="col clipText">
-           <a class="pWidth_840 vAlignMiddle margRight5 cryptoSignsSmall" data-modalup="" href="/epz/order/notice/signview/listModal.html?attachmentId=203902179">
-            <span class="icon icon-small icon-cryptoSign_small vAlignMiddle">
-            </span>
-           </a>
-           <img alt="Microsoft Word Document" class="vAlignMiddle margRight5" data-tooltip="&lt;span class='custom-tooltiptext'&gt;Microsoft Word Document&lt;/span&gt;" src="/epz/static/img/icons/type/docx.svg">
-            <span class="section__value">
-             <a href="https://zakupki.gov.ru/44fz/filestore/public/1.0/download/priz/file.html?uid=D6A81B3FC2104AD4822E9D183FCF3511" title="Проект_контракта_ТЭЦ.docx">
-              Проект_контракта ТЭЦ
-             </a>
-            </span>
-           </img>
-          </div>
-         </div>
-         <div class="attachment row">
-          <div class="col clipText">
-           <a class="pWidth_840 vAlignMiddle margRight5 cryptoSignsSmall" data-modalup="" href="/epz/order/notice/signview/listModal.html?attachmentId=203902180">
-            <span class="icon icon-small icon-cryptoSign_small vAlignMiddle">
-            </span>
-           </a>
-           <img alt="Microsoft Word Document" class="vAlignMiddle margRight5" data-tooltip="&lt;span class='custom-tooltiptext'&gt;Microsoft Word Document&lt;/span&gt;" src="/epz/static/img/icons/type/docx.svg">
-            <span class="section__value">
-             <a href="https://zakupki.gov.ru/44fz/filestore/public/1.0/download/priz/file.html?uid=F7882611D4794EFEB0DB243749B6B351" title="Описание_объекта_закупки.docx">
-              Описание_объекта_закупки
-             </a>
-            </span>
-           </img>
-          </div>
-         </div>
-         <div class="attachment row">
-          <div class="col clipText">
-           <a class="pWidth_840 vAlignMiddle margRight5 cryptoSignsSmall" data-modalup="" href="/epz/order/notice/signview/listModal.html?attachmentId=203902181">
-            <span class="icon icon-small icon-cryptoSign_small vAlignMiddle">
-            </span>
-           </a>
-           <img alt="Microsoft Word Document" class="vAlignMiddle margRight5" data-tooltip="&lt;span class='custom-tooltiptext'&gt;Microsoft Word Document&lt;/span&gt;" src="/epz/static/img/icons/type/docx.svg">
-            <span class="section__value">
-             <a href="https://zakupki.gov.ru/44fz/filestore/public/1.0/download/priz/file.html?uid=A3384FDF059B417CA12E32265597FD96" title="ТРЕБОВАНИЯ К СОДЕРЖАНИЮ, СОСТАВУ ЗАЯВКИ.docx">
-              ТРЕБОВАНИЯ К СОДЕРЖАНИЮ, СОСТАВУ ЗАЯВКИ
-             </a>
-            </span>
-           </img>
-          </div>
-         </div>
-         <div class="attachment row">
-          <div class="col clipText">
-           <a class="pWidth_840 vAlignMiddle margRight5 cryptoSignsSmall" data-modalup="" href="/epz/order/notice/signview/listModal.html?attachmentId=203902182">
+           <a class="pWidth_840 vAlignMiddle margRight5 cryptoSignsSmall" data-modalup="" href="/epz/order/notice/signview/listModal.html?attachmentId=202753060">
             <span class="icon icon-small icon-cryptoSign_small vAlignMiddle">
             </span>
            </a>
            <img alt="RAR архив" class="vAlignMiddle margRight5" data-tooltip="&lt;span class='custom-tooltiptext'&gt;RAR архив&lt;/span&gt;" src="/epz/static/img/icons/type/rar.svg">
             <span class="section__value">
-             <a href="https://zakupki.gov.ru/44fz/filestore/public/1.0/download/priz/file.html?uid=7E96565115C5476F993BBBAEC07E4692" title="СМЕТА КОНТРАКТА.rar">
-              СМЕТА КОНТРАКТА
+             <a href="https://zakupki.gov.ru/44fz/filestore/public/1.0/download/priz/file.html?uid=53E1C99429C6471EBF2E0E19F78FB711" title="Обоснование цены - мясо замороженное.rar">
+              Обоснование цены - мясо замороженное
              </a>
             </span>
            </img>
           </div>
          </div>
-         <div class="attachment row displayNone closedFilesDocs">
+         <div class="attachment row">
           <div class="col clipText">
-           <a class="pWidth_840 vAlignMiddle margRight5 cryptoSignsSmall" data-modalup="" href="/epz/order/notice/signview/listModal.html?attachmentId=203902183">
+           <a class="pWidth_840 vAlignMiddle margRight5 cryptoSignsSmall" data-modalup="" href="/epz/order/notice/signview/listModal.html?attachmentId=202753061">
             <span class="icon icon-small icon-cryptoSign_small vAlignMiddle">
             </span>
            </a>
            <img alt="RAR архив" class="vAlignMiddle margRight5" data-tooltip="&lt;span class='custom-tooltiptext'&gt;RAR архив&lt;/span&gt;" src="/epz/static/img/icons/type/rar.svg">
             <span class="section__value">
-             <a href="https://zakupki.gov.ru/44fz/filestore/public/1.0/download/priz/file.html?uid=1D0E83A70DBF4E9FB8C062D6A6E0FC21" title="Сметный расчет.rar">
-              Сметный расчет
+             <a href="https://zakupki.gov.ru/44fz/filestore/public/1.0/download/priz/file.html?uid=D0CF5A27BE6D480590DC7C319586E3B3" title="Контракты мясо замороженное.rar">
+              Контракты мясо замороженное
              </a>
             </span>
            </img>
           </div>
          </div>
-         <a class="cursorPointer margTop10 d-block" onclick="openClosedFilesDocs(this)">
-          Показать больше
-         </a>
+         <div class="attachment row">
+          <div class="col clipText">
+           <a class="pWidth_840 vAlignMiddle margRight5 cryptoSignsSmall" data-modalup="" href="/epz/order/notice/signview/listModal.html?attachmentId=202753062">
+            <span class="icon icon-small icon-cryptoSign_small vAlignMiddle">
+            </span>
+           </a>
+           <img alt="Microsoft Word Document" class="vAlignMiddle margRight5" data-tooltip="&lt;span class='custom-tooltiptext'&gt;Microsoft Word Document&lt;/span&gt;" src="/epz/static/img/icons/type/docx.svg">
+            <span class="section__value">
+             <a href="https://zakupki.gov.ru/44fz/filestore/public/1.0/download/priz/file.html?uid=DF47F338094C49BE9A8FAAFDD4AC03C9" title="Описание объекта закупки (мясо).docx">
+              Описание объекта закупки (мясо)
+             </a>
+            </span>
+           </img>
+          </div>
+         </div>
+         <div class="attachment row">
+          <div class="col clipText">
+           <a class="pWidth_840 vAlignMiddle margRight5 cryptoSignsSmall" data-modalup="" href="/epz/order/notice/signview/listModal.html?attachmentId=202753063">
+            <span class="icon icon-small icon-cryptoSign_small vAlignMiddle">
+            </span>
+           </a>
+           <img alt="Microsoft Word Document" class="vAlignMiddle margRight5" data-tooltip="&lt;span class='custom-tooltiptext'&gt;Microsoft Word Document&lt;/span&gt;" src="/epz/static/img/icons/type/docx.svg">
+            <span class="section__value">
+             <a href="https://zakupki.gov.ru/44fz/filestore/public/1.0/download/priz/file.html?uid=B491E18E97824A5882B1FF31F0822262" title="Требования к составу и содержанию заявки (мясо замороженное).docx">
+              Требования к составу и содержанию заявки (мясо замороженное)
+             </a>
+            </span>
+           </img>
+          </div>
+         </div>
         </div>
        </div>
       </div>
@@ -1891,7 +1864,7 @@
     <div class="container">
      <div class="col-sm-12 blockInfo">
       <h2 class="blockInfo__title">
-       Квитанции результатов согласования извещения на проведение запроса котировок в электронной форме
+       Квитанции результатов согласования извещений о проведении электронного аукциона
       </h2>
       <span class="section__title">
        Информация отсутствует
@@ -1913,11 +1886,145 @@
     <div class="container">
      <div class="col-sm-12 blockInfo">
       <h2 class="blockInfo__title">
-       Протоколы работы комиссии
+       Разъяснения положений извещения о проведении закупки
       </h2>
       <span class="section__title">
-       Сведения отсутствуют
+       Информация отсутствует
       </span>
+     </div>
+    </div>
+    <hr class="graySeparator"/>
+    <div class="container">
+     <div class="col-sm-12 blockInfo">
+      <h2 class="blockInfo__title">
+       Протоколы работы комиссии
+      </h2>
+      <div class="row no-gutters notice-documents blockInfo__section first-row-active-documents closedInactiveDocuments">
+       <div class="col-sm-6 b-r">
+        <div class="row no-gutters">
+         <div class="col-sm">
+          <div class="">
+           <div class="section__value docName">
+            <a href="/epz/order/notice/ea20/view/protocol/protocol-main-info.html?regNumber=0138300000425000885&amp;protocolId=50847845" target="_blank">
+             Протокол подачи ценовых предложений от 11.12.2025 №ЦПА1
+            </a>
+           </div>
+           <div class="row">
+            <div class="col-sm-6">
+             <div class="section__attrib">
+              Размещено на ЭП
+             </div>
+             <div class="section__value mb-3">
+              11.12.2025 11:50
+              <span class="timeZoneName" title="Петропавловск-Камчатский, стандартное время">
+               (МСК+9)
+              </span>
+             </div>
+             <div class="section__attrib">
+              Размещено в ЕИС
+             </div>
+             <div class="section__value inactiveClass">
+              11.12.2025 11:50
+              <span class="timeZoneName" title="Петропавловск-Камчатский, стандартное время">
+               (МСК+9)
+              </span>
+             </div>
+            </div>
+            <div class="col-sm-6">
+             <div class="section__attrib">
+              Редакция
+             </div>
+             <div class="section__value">
+              Действующая
+             </div>
+            </div>
+           </div>
+          </div>
+         </div>
+        </div>
+       </div>
+       <div class="col-sm-6">
+        <div class="blockFilesTabDocs">
+         <div class="section__title mb-3">
+          Прикрепленные файлы
+         </div>
+         <div class="attachment row">
+          <div class="col clipText">
+           <img alt="Adobe Acrobat Document" class="vAlignMiddle margRight5" data-tooltip="&lt;span class='custom-tooltiptext'&gt;Adobe Acrobat Document&lt;/span&gt;" src="/epz/static/img/icons/type/pdf.svg">
+            <span class="section__value">
+             <a href="https://zakupki.gov.ru/44fz/filestore/public/1.0/download/priz/file.html?uid=307640A1EBF24AAD85CFEA457CAAB463" title="Электронный документ, полученный из внешней системы.pdf ">
+              Электронный документ, полученный из внешней системы
+             </a>
+            </span>
+           </img>
+          </div>
+         </div>
+        </div>
+       </div>
+      </div>
+      <div class="row no-gutters notice-documents blockInfo__section row-active-documents">
+       <div class="col-sm-6 b-r">
+        <div class="row no-gutters">
+         <div class="col-sm">
+          <div class="">
+           <div class="section__value docName">
+            <a href="/epz/order/notice/ea20/view/protocol/protocol-main-info.html?regNumber=0138300000425000885&amp;protocolId=50870000" target="_blank">
+             Протокол подведения итогов определения поставщика (подрядчика, исполнителя) от 12.12.2025 №ИЭА1
+            </a>
+           </div>
+           <div class="row">
+            <div class="col-sm-6">
+             <div class="section__attrib">
+              Размещено на ЭП
+             </div>
+             <div class="section__value mb-3">
+              12.12.2025 14:10
+              <span class="timeZoneName" title="Петропавловск-Камчатский, стандартное время">
+               (МСК+9)
+              </span>
+             </div>
+             <div class="section__attrib">
+              Размещено в ЕИС
+             </div>
+             <div class="section__value inactiveClass">
+              12.12.2025 14:10
+              <span class="timeZoneName" title="Петропавловск-Камчатский, стандартное время">
+               (МСК+9)
+              </span>
+             </div>
+            </div>
+            <div class="col-sm-6">
+             <div class="section__attrib">
+              Редакция
+             </div>
+             <div class="section__value">
+              Действующая
+             </div>
+            </div>
+           </div>
+          </div>
+         </div>
+        </div>
+       </div>
+       <div class="col-sm-6">
+        <div class="blockFilesTabDocs">
+         <div class="section__title mb-3">
+          Прикрепленные файлы
+         </div>
+         <div class="attachment row">
+          <div class="col clipText">
+           <img alt="Microsoft Word Document" class="vAlignMiddle margRight5" data-tooltip="&lt;span class='custom-tooltiptext'&gt;Microsoft Word Document&lt;/span&gt;" src="/epz/static/img/icons/type/docx.svg">
+            <span class="section__value">
+             <a href="https://zakupki.gov.ru/44fz/filestore/public/1.0/download/priz/file.html?uid=77E400D030674F96982D03C3E52B713F" title="Электронный документ, полученный из внешней системы.docx ">
+              Электронный документ, полученный из внешней системы
+             </a>
+            </span>
+           </img>
+          </div>
+         </div>
+        </div>
+       </div>
+      </div>
      </div>
     </div>
     <hr class="graySeparator"/>
@@ -1937,7 +2044,7 @@
          </div>
          <div class="figure-footer__text">
           <h4 class="heading-h4 poll-title">
-           Поделитесь мнением о качестве работы единой
+           Поделитесь мнением о качестве работы единой
                                                 информационной системы
           </h4>
          </div>
@@ -2106,8 +2213,8 @@
          </a>
         </p>
         <figcaption class="partner__desc">
-         Автоматизированная система торгов государственного
-                                    оборонного
+         Автоматизированная система торгов государственного
+                                    оборонного
                                     заказа
          <br/>
         </figcaption>
@@ -2209,7 +2316,7 @@
           © Федеральное казначейство, 2025
          </small>
          <small class="copyright__text">
-          Версия hotfix/15.3.3.10 rev7b2f8af2 от 29.10.2025
+          Версия hotfix/15.3.10.19 rev217f0b29 от 09.12.2025
          </small>
         </div>
        </div>
@@ -2289,15 +2396,15 @@
   </script>
   <!-- Yandex.Metrika counter -->
   <script type="text/javascript">
-   (function(m,e,t,r,i,k,a){m[i]=m[i]||function(){(m[i].a=m[i].a||[]).push(arguments)};
-        m[i].l=1*new Date();k=e.createElement(t),a=e.getElementsByTagName(t)[0],k.async=1,k.src=r,a.parentNode.insertBefore(k,a)})
-    (window, document, "script", "https://mc.yandex.ru/metrika/tag.js", "ym");
-
-    ym(36706425, "init", {
-        clickmap:true,
-        trackLinks:true,
-        accurateTrackBounce:true,
-        webvisor:true
+   (function(m,e,t,r,i,k,a){m[i]=m[i]||function(){(m[i].a=m[i].a||[]).push(arguments)};
+        m[i].l=1*new Date();k=e.createElement(t),a=e.getElementsByTagName(t)[0],k.async=1,k.src=r,a.parentNode.insertBefore(k,a)})
+    (window, document, "script", "https://mc.yandex.ru/metrika/tag.js", "ym");
+
+    ym(36706425, "init", {
+        clickmap:true,
+        trackLinks:true,
+        accurateTrackBounce:true,
+        webvisor:true
     });
   </script>
   <noscript>
@@ -2307,9 +2414,9 @@
   </noscript>
   <!-- /Yandex.Metrika counter -->
   <script type="text/javascript">
-   if (window.epzAnalytics) window.epzAnalytics.track();
-$(document).ready(function () {
-        checkNotice();
+   if (window.epzAnalytics) window.epzAnalytics.track();
+$(document).ready(function () {
+        checkNotice();
 });
   </script>
   <div id="custom-tooltip">
