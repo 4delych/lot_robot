@@ -568,6 +568,8 @@ class ProcurementSearcher:
 
             # Стратегия 1: Ищем по классам, которые обычно используются для документов
             document_selectors = [
+                "a[href*='/file/get/']",
+                "a[href*='file/get']",
                 "a[href*='download']",
                 "a[href*='.pdf']",
                 "a[href*='.doc']",
@@ -591,7 +593,7 @@ class ProcurementSearcher:
                 for link in links:
                     href = link.get("href")
                     if href:
-                        full_url = urljoin(CONFIG["BASE_URL"], href)
+                        full_url = urljoin(documents_url, href)
 
                         # Проверяем, что это документ
                         if self._is_document_link(full_url, link):
@@ -603,7 +605,7 @@ class ProcurementSearcher:
             for link in all_links:
                 href = link.get("href")
                 if href:
-                    full_url = urljoin(CONFIG["BASE_URL"], href)
+                    full_url = urljoin(documents_url, href)
 
                     # Пропускаем, если уже есть в списке
                     if any(doc["url"] == full_url for doc in document_links):
@@ -742,6 +744,22 @@ class ProcurementSearcher:
     def _get_document_name(self, link_element):
         """Извлекает имя документа из элемента ссылки."""
         # Пробуем получить имя из текста ссылки
+        # tektorg: имя документа лежит в div.hAcoWe (внутри ссылки)
+        try:
+            name_block = link_element.select_one(".hAcoWe")
+            if name_block:
+                txt = name_block.get_text(" ", strip=True)
+                if txt:
+                    # Часто приходит "X (X)" — уберём дубль
+                    if "(" in txt and txt.endswith(")"):
+                        left = txt.split("(", 1)[0].strip()
+                        inside = txt.rsplit("(", 1)[1].rstrip(")").strip()
+                        if left and inside and left == inside:
+                            txt = left
+                    return txt
+        except Exception:
+            pass
+
         name = link_element.get_text(strip=True)
         if name and len(name) > 2:
             return name

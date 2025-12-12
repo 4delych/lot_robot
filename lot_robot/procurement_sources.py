@@ -635,8 +635,9 @@ class TektorgSource(ProcurementSource):
             return None
 
     def get_documents_url(self, lot_url: str) -> tuple[str, dict] | None:
-        """Для tektorg.ru документы обычно на той же странице лота."""
-        # Документы находятся на странице лота, нужно будет парсить их оттуда
-        # Пока возвращаем None - реализуем позже
-        return None
+        """
+        tektorg: документы лежат на странице самого лота (procedures/auction/view/...).
+        Поэтому возвращаем сам lot_url.
+        """
+        return lot_url, {}
 
