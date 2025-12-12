@@ -43,6 +43,7 @@ except ImportError:
     win32_constants = None
 
 from config import CONFIG, PURCHASE_STAGES, LAWS
+from procurement_sources import ProcurementSource, ZakupkiGovSource, TektorgSource
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +51,13 @@ logger = logging.getLogger(__name__)
 class ProcurementSearcher:
     """Handle web scraping operations with proper error handling and session management."""
 
-    def __init__(self):
+    def __init__(self, sources: list[ProcurementSource] | None = None):
         self.session = self._create_session()
+        # По умолчанию используем все доступные источники
+        if sources is None:
+            self.sources = [ZakupkiGovSource(), TektorgSource()]
+        else:
+            self.sources = sources
 
     # создание сессии
     def _create_session(self):
@@ -93,69 +99,127 @@ class ProcurementSearcher:
             purchase_stage=None,
             law=None,
             progress_callback=None,
+            source_names: list[str] | None = None,
     ):
         """
-        Search for procurements with improved error handling and robustness.
+        Search for procurements across multiple sources.
+        
+        Args:
+            source_names: список названий источников для поиска (если None - все источники)
         """
         if not keyword or not keyword.strip():
             raise ValueError("Ключевое слово не может быть пустым")
 
-        url = f"{CONFIG['BASE_URL']}/epz/order/extendedsearch/results.html"
-        params = {
-            "searchString": keyword.strip(),
-            "pageNumber": "1",
-            "recordsPerPage": f"_{CONFIG['RESULTS_PER_PAGE']}",
-        }
+        # Фильтруем источники, если указаны
+        sources_to_use = self.sources
+        if source_names:
+            sources_to_use = [s for s in self.sources if s.get_name() in source_names]
 
-        # Add purchase stage filter
-        if purchase_stage and purchase_stage in PURCHASE_STAGES:
-            stage_params = self._get_stage_params(purchase_stage)
-            params.update(stage_params)
+        if not sources_to_use:
+            raise ValueError("Не выбрано ни одного источника для поиска")
 
-        # Add law filter
-        if law and law in LAWS:
-            law_params = self._get_law_params(law)
-            params.update(law_params)
+        all_results = []
 
-        if min_price is not None and min_price is not None :
-            self._add_price_params(params, min_price, max_price)
+        for source in sources_to_use:
+            source_name = source.get_name()
+            try:
+                if progress_callback:
+                    progress_callback(f"Поиск на {source_name}...")
 
-        if progress_callback:
-            progress_callback("Отправка запроса...")
+                url, params = source.build_search_url(
+                    keyword, min_price, max_price, purchase_stage, law
+                )
 
-        try:
-            logger.info(
-                f"Searching for: {keyword!r} with filters - "
-                f"stage: {purchase_stage}, law: {law}, "
-                f"min_price: {min_price}, max_price: {max_price}"
-            )
+                logger.info(
+                    f"Searching on {source_name}: {keyword!r} with filters - "
+                    f"stage: {purchase_stage}, law: {law}, "
+                    f"min_price: {min_price}, max_price: {max_price}"
+                )
 
-            response = self.session.get(
-                url, params=params, timeout=CONFIG["REQUEST_TIMEOUT"]
-            )
-            response.raise_for_status()
+                # Для tektorg.ru может потребоваться специальная обработка параметров
+                # requests автоматически закодирует параметры, но проверим результат
+                logger.info(f"Requesting {url} with params: {params}")
+                
+                # Для tektorg.ru используем специальную обработку параметров
+                if source_name == "tektorg.ru":
+                    # Формируем query string вручную для правильной кодировки
+                    from urllib.parse import quote_plus, quote
+                    query_parts = []
+                    for key, value in params.items():
+                        if value:
+                            # Кодируем ключ: квадратные скобки должны стать %5B%5D
+                            # Используем quote (не quote_plus) для ключа, чтобы [] закодировались
+                            encoded_key = quote(key, safe="")
+                            
+                            # Для цен уже используется + вместо пробелов, поэтому не кодируем +
+                            # Для остальных значений используем quote_plus (пробелы -> +, ; -> %3B)
+                            if isinstance(value, str):
+                                # Если значение уже содержит + (это цена), не кодируем +
+                                if "+" in value and key in ("sumPrice_start", "sumPrice_end"):
+                                    # Для цен: кодируем только русские символы, но оставляем + как есть
+                                    encoded_value = quote(value, safe="+")
+                                else:
+                                    encoded_value = quote_plus(value)
+                            else:
+                                encoded_value = quote_plus(str(value))
+                            query_parts.append(f"{encoded_key}={encoded_value}")
+                    
+                    if query_parts:
+                        full_url = f"{url}?{'&'.join(query_parts)}"
+                    else:
+                        full_url = url
+                    
+                    logger.info(f"Tektorg final URL: {full_url}")
+                    if progress_callback:
+                        progress_callback(f"Запрос: {full_url}")
+                    response = self.session.get(
+                        full_url, timeout=CONFIG["REQUEST_TIMEOUT"]
+                    )
+                else:
+                    response = self.session.get(
+                        url, params=params, timeout=CONFIG["REQUEST_TIMEOUT"]
+                    )
+                
+                response.raise_for_status()
+                
+                # Логируем финальный URL для отладки
+                logger.info(f"Final URL (after redirects): {response.url}")
+                if progress_callback and source_name != "tektorg.ru":
+                    progress_callback(f"Запрос: {response.url}")
 
-            if progress_callback:
-                progress_callback("Обработка результатов...")
+                if progress_callback:
+                    progress_callback(f"Обработка результатов с {source_name}...")
 
-            time.sleep(CONFIG["REQUEST_DELAY"])
+                time.sleep(CONFIG["REQUEST_DELAY"])
 
-            return self._parse_results(
-                response.text, min_price, max_price, progress_callback
-            )
+                # Убеждаемся, что контент правильно декодирован
+                html_content = response.text
+                if not isinstance(html_content, str):
+                    # Если response.text не строка, пробуем декодировать вручную
+                    html_content = response.content.decode('utf-8', errors='ignore')
 
-        except requests.exceptions.Timeout:
-            logger.error("Request timeout")
-            raise Exception("Превышено время ожидания ответа от сервера")
-        except requests.exceptions.ConnectionError:
-            logger.error("Connection error")
-            raise Exception("Ошибка подключения к серверу")
-        except requests.exceptions.HTTPError as e:
-            logger.error(f"HTTP error: {e}")
-            raise Exception(f"Ошибка HTTP: {e.response.status_code}")
-        except Exception as e:
-            logger.error(f"Unexpected error during search: {e}")
-            raise Exception(f"Неожиданная ошибка: {str(e)}")
+                # Парсим результаты через источник
+                source_results = source.parse_results(html_content, progress_callback)
+
+                # Фильтруем по цене (если источник не сделал это сам)
+                filtered_results = []
+                for result in source_results:
+                    if self._passes_price_filter(result.get("Цена", 0), min_price, max_price):
+                        # Добавляем метаданные об источнике
+                        result["Источник"] = source_name
+                        filtered_results.append(result)
+
+                all_results.extend(filtered_results)
+                logger.info(f"Found {len(filtered_results)} results from {source_name}")
+
+            except Exception as e:
+                logger.error(f"Error searching on {source_name}: {e}")
+                if progress_callback:
+                    progress_callback(f"Ошибка на {source_name}: {str(e)}")
+                continue
+
+        logger.info(f"Total results from all sources: {len(all_results)}")
+        return all_results
 
     def _get_stage_params(self, purchase_stage):
         """Get URL parameters for purchase stage filter."""
@@ -423,54 +487,63 @@ class ProcurementSearcher:
             logger.error(f"Error extracting noticeInfoId from {url}: {e}")
             return None
 
-    def download_documents(self, lot_url, progress_callback=None):
-        """
-        Скачивает документы из лота с учётом разных схем:
-        - 44-ФЗ: /epz/order/notice/ea20|ea44|.../view/common-info.html?regNumber=...
-                 -> /epz/order/notice/.../view/documents.html?regNumber=...
-        - 223-ФЗ: /epz/order/notice/notice223/... + noticeInfoId
-        """
-        try:
-            parsed_url = urlparse(lot_url)
-            path = parsed_url.path or ""
-            query_dict = parse_qs(parsed_url.query)  # значения = списки
+    def _get_source_for_url(self, url: str) -> ProcurementSource | None:
+        """Определяет источник по URL."""
+        for source in self.sources:
+            if source.get_name() in url:
+                return source
+        return None
 
-            documents_url = None
-            params = {}
+    def _get_documents_url_legacy(self, lot_url):
+        """Старая логика для zakupki.gov.ru (для обратной совместимости)."""
+        parsed_url = urlparse(lot_url)
+        path = parsed_url.path or ""
+        query_dict = parse_qs(parsed_url.query)
 
-            # Ветка 44-ФЗ и родственных (ea20, ea44, zk20 и т.п.)
-            # Пример:
-            # https://zakupki.gov.ru/epz/order/notice/ea20/view/common-info.html?regNumber=0117...
-            if "/epz/order/notice/" in path and "view/" in path:
-                # Заменяем common-info.html -> documents.html
-                if "common-info.html" in path:
-                    docs_path = path.replace("common-info.html", "documents.html")
-                else:
-                    # вдруг нам уже дали documents.html
-                    docs_path = path
+        documents_url = None
+        params = {}
 
-                documents_url = urljoin(CONFIG["BASE_URL"], docs_path)
-
-                # parse_qs возвращает {key: [value]}; сплющим до {key: value}
-                params = {k: v[0] for k, v in query_dict.items() if v}
-
+        if "/epz/order/notice/" in path and "view/" in path:
+            if "common-info.html" in path:
+                docs_path = path.replace("common-info.html", "documents.html")
             else:
-                # Ветка 223-ФЗ: старая схема через notice223 и noticeInfoId
-                notice_info_id = query_dict.get("noticeInfoId", [None])[0]
-                if not notice_info_id:
-                    notice_info_id = self._extract_notice_info_id(lot_url)
-
-                if not notice_info_id:
-                    logger.error(f"Could not extract noticeInfoId from URL: {lot_url}")
-                    return []
-
-                documents_url = (
-                    f"{CONFIG['BASE_URL']}/epz/order/notice/notice223/documents.html"
-                )
+                docs_path = path
+            documents_url = urljoin(CONFIG["BASE_URL"], docs_path)
+            params = {k: v[0] for k, v in query_dict.items() if v}
+        else:
+            notice_info_id = query_dict.get("noticeInfoId", [None])[0]
+            if not notice_info_id:
+                notice_info_id = self._extract_notice_info_id(lot_url)
+            if notice_info_id:
+                documents_url = f"{CONFIG['BASE_URL']}/epz/order/notice/notice223/documents.html"
                 params = {
                     "noticeInfoId": notice_info_id,
                     "backUrl": "/epz/order/notice/notice223/search.html",
                 }
+
+        return documents_url, params
+
+    def download_documents(self, lot_url, progress_callback=None):
+        """
+        Скачивает документы из лота. Определяет источник по URL и использует соответствующий метод.
+        """
+        try:
+            # Определяем источник по URL
+            source = self._get_source_for_url(lot_url)
+            if source and hasattr(source, 'get_documents_url'):
+                docs_info = source.get_documents_url(lot_url)
+                if docs_info:
+                    documents_url, params = docs_info
+                else:
+                    # Если источник не поддерживает get_documents_url, используем старую логику
+                    documents_url, params = self._get_documents_url_legacy(lot_url)
+            else:
+                # Fallback на старую логику для zakupki.gov.ru
+                documents_url, params = self._get_documents_url_legacy(lot_url)
+
+            if not documents_url:
+                logger.error(f"Could not determine documents URL for: {lot_url}")
+                return []
 
             if progress_callback:
                 progress_callback("Загрузка страницы документов.")

@@ -104,9 +104,27 @@ class ProcurementApp:
         )
         self.law_combo.grid(row=0, column=3, sticky="w")
 
+        # Sources selection frame
+        sources_frame = ttk.LabelFrame(
+            main_frame, text="Источники поиска", padding="5"
+        )
+        sources_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+
+        self.source_vars = {}
+        available_sources = ["zakupki.gov.ru", "tektorg.ru"]
+        for i, source_name in enumerate(available_sources):
+            var = tk.BooleanVar(value=True)  # По умолчанию все включены
+            self.source_vars[source_name] = var
+            cb = ttk.Checkbutton(
+                sources_frame,
+                text=source_name,
+                variable=var
+            )
+            cb.grid(row=0, column=i, sticky="w", padx=10)
+
         # Buttons frame
         buttons_frame = ttk.Frame(main_frame)
-        buttons_frame.grid(row=3, column=0, columnspan=2, pady=10)
+        buttons_frame.grid(row=4, column=0, columnspan=2, pady=10)
 
         self.search_btn = ttk.Button(
             buttons_frame, text="🔍 Поиск", command=self.search
@@ -129,7 +147,7 @@ class ProcurementApp:
         # Progress bar
         self.progress_var = tk.StringVar(value="Готов к поиску")
         progress_frame = ttk.Frame(main_frame)
-        progress_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        progress_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         progress_frame.columnconfigure(0, weight=1)
 
         self.progress_bar = ttk.Progressbar(progress_frame, mode="indeterminate")
@@ -142,7 +160,7 @@ class ProcurementApp:
         doc_frame = ttk.LabelFrame(
             main_frame, text="Поиск в документах ТЗ", padding="5"
         )
-        doc_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        doc_frame.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         doc_frame.columnconfigure(0, weight=1)
 
         ttk.Label(doc_frame, text="Ключевые слова для поиска (через запятую):").grid(
@@ -171,28 +189,33 @@ class ProcurementApp:
 
         # Results table
         self._setup_results_table(main_frame)
+        
+        # Обновляем rowconfigure для новой структуры
+        main_frame.rowconfigure(7, weight=1)  # Таблица теперь на строке 7
 
     def _setup_results_table(self, parent):
         """Setup the results table with scrollbars."""
         table_frame = ttk.Frame(parent)
         table_frame.grid(
-            row=6, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=10
+            row=7, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=10
         )
         table_frame.columnconfigure(0, weight=1)
         table_frame.rowconfigure(0, weight=1)
 
-        columns = ("Название", "Цена", "Ссылка")
+        columns = ("Название", "Цена", "Источник", "Ссылка")
         self.tree = ttk.Treeview(
             table_frame, columns=columns, show="headings", height=15
         )
 
         self.tree.heading("Название", text="Название", anchor="w")
         self.tree.heading("Цена", text="Цена (руб)", anchor="e")
+        self.tree.heading("Источник", text="Источник", anchor="w")
         self.tree.heading("Ссылка", text="Ссылка", anchor="w")
 
-        self.tree.column("Название", width=400, anchor="w")
+        self.tree.column("Название", width=350, anchor="w")
         self.tree.column("Цена", width=120, anchor="e")
-        self.tree.column("Ссылка", width=350, anchor="w")
+        self.tree.column("Источник", width=120, anchor="w")
+        self.tree.column("Ссылка", width=300, anchor="w")
 
         v_scrollbar = ttk.Scrollbar(
             table_frame, orient="vertical", command=self.tree.yview
@@ -215,11 +238,12 @@ class ProcurementApp:
         item = self.tree.selection()[0] if self.tree.selection() else None
         if item:
             values = self.tree.item(item, "values")
-            if len(values) >= 3 and values[2] != "Ссылка не найдена":
+            # Теперь ссылка на 4-й позиции (после Источника)
+            if len(values) >= 4 and values[3] != "Ссылка не найдена":
                 import webbrowser
 
                 try:
-                    webbrowser.open(values[2])
+                    webbrowser.open(values[3])
                 except Exception as e:
                     messagebox.showerror("Ошибка", f"Не удалось открыть ссылку:\n{e}")
 
@@ -277,10 +301,18 @@ class ProcurementApp:
         purchase_stage = self._get_stage_key(self.stage_var.get())
         law = self._get_law_key(self.law_var.get())
 
+        # Get selected sources
+        selected_sources = [
+            name for name, var in self.source_vars.items() if var.get()
+        ]
+        if not selected_sources:
+            messagebox.showerror("Ошибка", "Выберите хотя бы один источник для поиска")
+            return
+
         # Start search thread
         self.search_thread = threading.Thread(
             target=self._perform_search,
-            args=(keyword, min_price, max_price, purchase_stage, law),
+            args=(keyword, min_price, max_price, purchase_stage, law, selected_sources),
             daemon=True,
         )
         self.search_thread.start()
@@ -299,7 +331,7 @@ class ProcurementApp:
                 return key
         return None
 
-    def _perform_search(self, keyword, min_price, max_price, purchase_stage, law):
+    def _perform_search(self, keyword, min_price, max_price, purchase_stage, law, source_names=None):
         """Perform search in background thread."""
 
         def update_progress(message):
@@ -328,6 +360,7 @@ class ProcurementApp:
                 price_display = (
                     f"{result['Цена']:,.2f}" if result["Цена"] > 0 else "Не указана"
                 )
+                source = result.get("Источник", "Неизвестно")
                 self.tree.insert(
                     "",
                     "end",
@@ -338,6 +371,7 @@ class ProcurementApp:
                             else result["Название"]
                         ),
                         price_display,
+                        source,
                         result["Ссылка"],
                     ),
                 )
@@ -355,7 +389,7 @@ class ProcurementApp:
 
         try:
             results = self.searcher.search_procurements(
-                keyword, min_price, max_price, purchase_stage, law, update_progress
+                keyword, min_price, max_price, purchase_stage, law, update_progress, source_names
             )
             self.root.after(0, lambda: update_ui_finish(results))
         except Exception as e:
@@ -387,6 +421,7 @@ class ProcurementApp:
                         "Цена (руб)": (
                             result["Цена"] if result["Цена"] > 0 else "Не указана"
                         ),
+                        "Источник": result.get("Источник", "Неизвестно"),
                         "Ссылка": result["Ссылка"],
                     }
                 )
@@ -460,7 +495,8 @@ class ProcurementApp:
 
         item = selection[0]
         values = self.tree.item(item, "values")
-        lot_url = values[2] if len(values) >= 3 else None
+        # Ссылка теперь на 4-й позиции
+        lot_url = values[3] if len(values) >= 4 else None
 
         if not lot_url or lot_url == "Ссылка не найдена":
             messagebox.showerror("Ошибка", "Неверная ссылка на лот")
