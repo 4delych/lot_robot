@@ -65,12 +65,20 @@ class ProcurementSearcher:
 
         for doc in documents:
             filename = self._determine_document_filename(doc)
-            text = self._extract_text_from_content(
+            raw_text = self._extract_text_from_content(
                 doc.get("content") or b"",
                 filename,
                 doc.get("content_type", "") or "",
             )
-            text = " ".join((text or "").split()).strip()
+
+            print(f"[DOC TEXT] {doc.get('name') or filename} -> {len(raw_text or '')} chars")
+
+            # ✅ сохраняем переносы строк, чистим пробелы построчно
+            raw = (raw_text or "").replace("\r\n", "\n").replace("\r", "\n")
+            lines = [re.sub(r"[ \t]+", " ", ln).strip() for ln in raw.split("\n")]
+            lines = [ln for ln in lines if ln]  # убираем пустые строки
+            text = "\n".join(lines).strip()
+
             if not text or self._looks_like_garbage_text(text):
                 logger.info("Skip garbage/empty extracted text: %s", doc.get("name") or filename)
                 continue
@@ -130,7 +138,7 @@ class ProcurementSearcher:
         t = t.replace("\ufffd", " ")
 
         # режем очень длинные “линии” (часто это мусор из PDF/сканов)
-        t = re.sub(r"[^\n]{2000,}", " ", t)
+        t = "\n".join(ln[:2000] for ln in t.split("\n"))
 
         # схлопываем много одинаковых знаков подряд
         t = re.sub(r"([=*_#\-])\1{8,}", r"\1\1\1", t)
