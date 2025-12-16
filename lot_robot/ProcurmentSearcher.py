@@ -8,6 +8,8 @@ import html
 import tempfile
 import locale
 from urllib.parse import urljoin, urlparse, parse_qs, unquote
+import re
+from urllib.parse import urlparse
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -50,6 +52,69 @@ logger = logging.getLogger(__name__)
 
 class ProcurementSearcher:
     """Handle web scraping operations with proper error handling and session management."""
+
+    def _is_tektorg_allowed_doc_url(self, url: str) -> bool:
+        try:
+            p = urlparse(url)
+            host = (p.netloc or "").lower()
+            path = (p.path or "")
+
+            # 1) Файлы лота
+            if host == "44.tektorg.ru" and path.startswith("/file/get/"):
+                return True
+
+            # 2) Open API документы процедуры
+            if host == "api.tektorg.ru" and path.startswith("/open-api/documents/procedure/"):
+                return True
+
+            return False
+        except Exception:
+            return False
+
+
+    def _is_blacklisted_document_url(self, url: str) -> tuple[bool, str]:
+        """
+        Единый denylist для всех источников.
+        Возвращает (True, reason) если URL нужно пропустить.
+        """
+        try:
+            p = urlparse(url)
+            host = (p.netloc or "").lower()
+            path = (p.path or "").lower()
+
+            # tektorg: режем страницы сайта (это не документы лота)
+            if host in ("www.tektorg.ru", "tektorg.ru"):
+                return True, "tektorg:www-page"
+
+            # tektorg: режем страницы ".../documents" (это HTML-раздел, не файл)
+            if host.endswith("tektorg.ru") and path.endswith("/documents"):
+                return True, "tektorg:documents-page"
+
+            # zakupki.gov.ru: не нужны *view.html
+            if "zakupki.gov.ru" in host and path.endswith("view.html"):
+                return True, "zakupki:view.html"
+
+            if "zakupki.gov.ru" in host and path.endswith("documents.html"):
+                return True, "zakupki:documents.html"
+
+            if "zakupki.gov.ru" in host and path.endswith("zakupki-traffic.xlsx"):
+                return True, "zakupki:zakupki-traffic.xlsx"
+
+            # zakupki.gov.ru: служебные страницы
+            if "zakupki.gov.ru" in host and "/purchase/public/download/signs/" in path:
+                return True, "zakupki:signs-render"
+            if "zakupki.gov.ru" in host and "/purchase/public/print-form/" in path:
+                return True, "zakupki:print-form"
+
+            if host.endswith("tektorg.ru") and path.endswith("/documents"):
+                return True, "tektorg:documents-page"
+
+            if host.endswith("tektorg.ru") and path.startswith("/documents/"):
+                return True, "tektorg:site-documents"
+
+            return False, ""
+        except Exception:
+            return False, ""
 
     def __init__(self, sources: list[ProcurementSource] | None = None):
         self.session = self._create_session()
@@ -530,6 +595,7 @@ class ProcurementSearcher:
         try:
             # Определяем источник по URL
             source = self._get_source_for_url(lot_url)
+            source_name = source.get_name() if source else ""
             if source and hasattr(source, 'get_documents_url'):
                 docs_info = source.get_documents_url(lot_url)
                 if docs_info:
@@ -595,6 +661,14 @@ class ProcurementSearcher:
                     if href:
                         full_url = urljoin(documents_url, href)
 
+                        blocked, reason = self._is_blacklisted_document_url(full_url)
+                        if blocked:
+                            logger.debug("Skip link by blacklist (%s): %s", reason, full_url)
+                            continue
+
+                        if source_name == "tektorg.ru" and not self._is_tektorg_allowed_doc_url(full_url):
+                            continue
+
                         # Проверяем, что это документ
                         if self._is_document_link(full_url, link):
                             name = self._get_document_name(link)
@@ -609,6 +683,14 @@ class ProcurementSearcher:
 
                     # Пропускаем, если уже есть в списке
                     if any(doc["url"] == full_url for doc in document_links):
+                        continue
+
+                    blocked, reason = self._is_blacklisted_document_url(full_url)
+                    if blocked:
+                        logger.debug("Skip link by blacklist (%s): %s", reason, full_url)
+                        continue
+
+                    if source_name == "tektorg.ru" and not self._is_tektorg_allowed_doc_url(full_url):
                         continue
 
                     if self._is_document_link(full_url, link):
