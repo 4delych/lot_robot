@@ -43,7 +43,7 @@ except ImportError:
     win32_constants = None
 
 from config import CONFIG, PURCHASE_STAGES, LAWS
-from procurement_sources import ProcurementSource, ZakupkiGovSource, TektorgSource
+from procurement_sources import ProcurementSource, ZakupkiGovSource, TektorgSource, BidzaarSource
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ class ProcurementSearcher:
         self.session = self._create_session()
         # По умолчанию используем все доступные источники
         if sources is None:
-            self.sources = [ZakupkiGovSource(), TektorgSource()]
+            self.sources = [ZakupkiGovSource(), TektorgSource(), BidzaarSource()]
         else:
             self.sources = sources
 

@@ -7,6 +7,7 @@ import logging
 from abc import ABC, abstractmethod
 from urllib.parse import urljoin, urlparse, quote_plus, urlencode
 from bs4 import BeautifulSoup
+import uuid
 import requests
 
 logger = logging.getLogger(__name__)
@@ -640,4 +641,108 @@ class TektorgSource(ProcurementSource):
         Поэтому возвращаем сам lot_url.
         """
         return lot_url, {}
+
+class BidzaarSource(ProcurementSource):
+    """Источник данных с bidzaar.com."""
+
+    def __init__(self, base_url: str = "https://bidzaar.com"):
+        self.base_url = base_url
+
+    def get_name(self) -> str:
+        return "bidzaar.com"
+
+    def build_search_url(self, keyword, min_price=None, max_price=None,
+                         purchase_stage=None, law=None) -> tuple[str, dict]:
+        """
+        Bidzaar:
+        - выдача: /requests/public/buy
+        - ключевое слово: параметр search (в HTML: input name="search")
+        - статус: filters[0].field=status, operator=in, value=[1|2|3]
+        - обязательный id=... (как в реальном URL)
+        """
+        url = f"{self.base_url}/requests/public/buy"
+
+        params: dict[str, str] = {
+            "sorting.key": "publishDate",
+            "sorting.direction": "desc",
+            "logic": "and",
+            "id": str(uuid.uuid4()),
+        }
+
+        kw = (keyword or "").strip()
+        if kw:
+            params["search"] = kw  # input name="search" :contentReference[oaicite:3]{index=3}
+
+        stage_to_status = {
+            "SUBMISSION": 1,   # Подача заявок
+            "EVALUATION": 2,   # Подведение итогов
+            "COMPLETED": 3,    # Завершен
+        }
+
+        if purchase_stage in stage_to_status:
+            code = stage_to_status[purchase_stage]
+            params["filters[0].operator"] = "in"
+            params["filters[0].field"] = "status"
+            params["filters[0].value"] = f"[{code}]"
+        else:
+            # без фильтра статуса => filters=[]
+            params["filters"] = "[]"
+
+        return url, params
+
+    def parse_results(self, html_content: str, progress_callback=None) -> list[dict]:
+        if isinstance(html_content, bytes):
+            html_content = html_content.decode("utf-8", errors="ignore")
+
+        soup = BeautifulSoup(html_content, "html.parser")
+        results: list[dict] = []
+        seen: set[str] = set()
+
+        # В твоём HTML карточки выглядят так:
+        # .list-item-wrapper ... <a class="link mobile" href="https://bidzaar.com/process/light/...">
+        # и внутри span.name-item.ui-number + span.name-item.ui-name :contentReference[oaicite:4]{index=4}
+        anchors = soup.select(".list-item-wrapper a.link[href*='/process/light/']")
+
+        # fallback на случай изменений верстки
+        if not anchors:
+            anchors = soup.select("a[href*='/process/light/']")
+
+        total = len(anchors)
+        for i, a in enumerate(anchors, start=1):
+            if progress_callback:
+                progress_callback(f"Обработка результата {i} из {total}...")
+
+            href = (a.get("href") or "").strip()
+            if not href:
+                continue
+
+            link = urljoin(self.base_url, href)
+            if link in seen:
+                continue
+
+            num_el = a.select_one("span.name-item.ui-number")
+            name_el = a.select_one("span.name-item.ui-name")
+
+            num = (num_el.get_text(" ", strip=True) if num_el else "").strip()
+            name = (name_el.get_text(" ", strip=True) if name_el else "").strip()
+
+            title = ""
+            if num and name:
+                title = f"{num} — {name}"
+            else:
+                title = a.get_text(" ", strip=True)
+
+            title = " ".join(title.split()).strip()
+            if not title or len(title) < 3:
+                continue
+
+            results.append({"Название": title, "Цена": 0.0, "Ссылка": link})
+            seen.add(link)
+
+        return results
+
+    def get_documents_url(self, lot_url: str) -> tuple[str, dict] | None:
+        # по твоему требованию: документы не скачиваем
+        return None
+
 

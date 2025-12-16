@@ -112,7 +112,7 @@ class ProcurementApp:
         sources_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
 
         self.source_vars = {}
-        available_sources = ["zakupki.gov.ru", "tektorg.ru"]
+        available_sources = ["zakupki.gov.ru", "tektorg.ru", "bidzaar.com"]
         for i, source_name in enumerate(available_sources):
             var = tk.BooleanVar(value=True)  # По умолчанию все включены
             self.source_vars[source_name] = var
