@@ -9,6 +9,11 @@ CONFIG = {
     "USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 }
 
+CONFIG["LLM_API_KEY"] = "cCT8j22cdaqVFZGceW5iAigM1ULuIz0S"  # или оставь пустым и используй переменную окружения MISTRAL_API_KEY
+CONFIG["LLM_API_URL"] = "https://api.mistral.ai/v1/chat/completions"
+CONFIG["LLM_MODEL"] = "mistral-large-latest"
+CONFIG["LLM_REQUEST_TIMEOUT"] = 90
+
 # Search filter options
 PURCHASE_STAGES = {
     "": "Все этапы",

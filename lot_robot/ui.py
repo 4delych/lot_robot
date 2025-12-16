@@ -180,6 +180,14 @@ class ProcurementApp:
         )
         self.analyze_btn.pack(side=tk.LEFT, padx=5)
 
+        self.lot_report_btn = ttk.Button(
+            doc_buttons_frame,
+            text="📄 Анализ лота",
+            command=self.analyze_lot_report,
+        )
+        self.lot_report_btn.pack(side=tk.LEFT, padx=5)
+
+
         self.export_docs_btn = ttk.Button(
             doc_buttons_frame,
             text="📋 Экспорт результатов анализа",
@@ -487,6 +495,121 @@ class ProcurementApp:
         self.root.destroy()
 
     # МЕТОДЫ ДЛЯ РАБОТЫ С ДОКУМЕНТАМИ
+    def analyze_lot_report(self):
+        """Формирует отчет по выбранному лоту (общая инфо + аналитика документов через LLM)."""
+        selection = self.tree.selection()
+        if not selection:
+            messagebox.showwarning("Предупреждение", "Выберите лот для анализа")
+            return
+
+        item = selection[0]
+        values = self.tree.item(item, "values")
+        if len(values) < 4:
+            messagebox.showerror("Ошибка", "Не удалось прочитать данные выбранного лота")
+            return
+
+        lot_title = values[0]
+        lot_source = values[2]
+        lot_url = values[3]
+
+        if not lot_url or lot_url == "Ссылка не найдена":
+            messagebox.showerror("Ошибка", "Неверная ссылка на лот")
+            return
+
+        thread = threading.Thread(
+            target=self._perform_lot_report,
+            args=(lot_title, lot_url, lot_source),
+            daemon=True,
+        )
+        thread.start()
+
+    def _perform_lot_report(self, lot_title: str, lot_url: str, lot_source: str):
+        def update_progress(message):
+            self.root.after(0, lambda: self.progress_var.set(message))
+
+        self.root.after(0, lambda: self.progress_bar.start())
+
+        try:
+            update_progress("Скачивание документов лота...")
+            documents = self.searcher.download_documents(lot_url, update_progress)
+
+            update_progress("Объединение текста документов...")
+            combined_text = self.searcher.build_lot_documents_text(documents)
+
+            update_progress("LLM-анализ (цели/сроки/требования)...")
+            try:
+                llm_data = self.searcher.call_llm_lot_analysis(combined_text)
+            except Exception as err:
+                logger.warning("LLM analysis failed, fallback to dashes: %s", err)
+                llm_data = {"goals_tasks": "—", "timelines": "—", "requirements": "—"}
+
+            self.root.after(
+                0,
+                lambda: self._show_lot_report_window(
+                    lot_title=lot_title,
+                    lot_url=lot_url,
+                    lot_source=lot_source,
+                    documents=documents,
+                    llm_data=llm_data,
+                ),
+            )
+
+        except Exception as e:
+            logger.error("Lot report failed: %s", e)
+            err_text = str(e)
+            self.root.after(
+                0,
+                lambda err=err_text: messagebox.showerror(
+                    "Ошибка",
+                    f"Не удалось сформировать отчет:\n{err}"
+                )
+            )
+        finally:
+            self.root.after(0, lambda: self.progress_bar.stop())
+
+    def _show_lot_report_window(self, lot_title: str, lot_url: str, lot_source: str,
+                               documents: list[dict], llm_data: dict):
+        win = tk.Toplevel(self.root)
+        win.title("Отчет по лоту")
+        win.geometry("900x650")
+
+        text_frame = ttk.Frame(win)
+        text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        text_widget = scrolledtext.ScrolledText(text_frame, wrap=tk.WORD)
+        text_widget.pack(fill=tk.BOTH, expand=True)
+
+        # 1) Общая информация
+        text_widget.insert(tk.END, "ОТЧЕТ ПО ЛОТУ\n", "title")
+        text_widget.insert(tk.END, "=" * 60 + "\n\n")
+
+        text_widget.insert(tk.END, "1) ОБЩАЯ ИНФОРМАЦИЯ\n", "subtitle")
+        text_widget.insert(tk.END, f"Наименование лота: {lot_title}\n")
+        text_widget.insert(tk.END, f"Ссылка: {lot_url}\n")
+        text_widget.insert(tk.END, f"Площадка: {lot_source}\n\n")
+
+        # 2) Аналитика документов
+        text_widget.insert(tk.END, "2) АНАЛИТИКА ДОКУМЕНТОВ\n", "subtitle")
+        text_widget.insert(tk.END, f"Всего документов: {len(documents)}\n\n")
+
+        text_widget.insert(tk.END, f"Цели и задачи лота: {llm_data.get('goals_tasks','—')}\n\n")
+        text_widget.insert(tk.END, f"Сроки выполнения: {llm_data.get('timelines','—')}\n\n")
+        text_widget.insert(tk.END, f"Требования к выполнению работ: {llm_data.get('requirements','—')}\n\n")
+
+        # список документов
+        text_widget.insert(tk.END, "СПИСОК ДОКУМЕНТОВ\n", "subtitle")
+        text_widget.insert(tk.END, "-" * 60 + "\n")
+        if documents:
+            for doc in documents:
+                text_widget.insert(tk.END, f"• {doc.get('name')} ({doc.get('size')} bytes)\n")
+        else:
+            text_widget.insert(tk.END, "—\n")
+
+        text_widget.tag_configure("title", font=("Arial", 12, "bold"))
+        text_widget.tag_configure("subtitle", font=("Arial", 10, "bold"))
+        text_widget.config(state=tk.DISABLED)
+
+
     def analyze_documents(self):
         """Анализирует документы выбранного лота."""
         selection = self.tree.selection()

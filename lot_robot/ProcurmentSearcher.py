@@ -10,6 +10,7 @@ import locale
 from urllib.parse import urljoin, urlparse, parse_qs, unquote
 import re
 from urllib.parse import urlparse
+import json
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -52,6 +53,257 @@ logger = logging.getLogger(__name__)
 
 class ProcurementSearcher:
     """Handle web scraping operations with proper error handling and session management."""
+
+    def build_lot_documents_text(self, documents: list[dict], max_chars: int = 120_000) -> str:
+        """
+        Склеивает текст из всех документов в один текст.
+        Использует существующий парсер _extract_text_from_content().
+        Ограничивает общий размер, чтобы не убиться об лимиты LLM.
+        """
+        parts: list[str] = []
+        total = 0
+
+        for doc in documents:
+            filename = self._determine_document_filename(doc)
+            text = self._extract_text_from_content(
+                doc.get("content") or b"",
+                filename,
+                doc.get("content_type", "") or "",
+            )
+            text = " ".join((text or "").split()).strip()
+            if not text or self._looks_like_garbage_text(text):
+                logger.info("Skip garbage/empty extracted text: %s", doc.get("name") or filename)
+                continue
+
+            header = f"\n\n===== ДОКУМЕНТ: {doc.get('name') or filename} =====\n"
+            chunk = header + text
+
+            if total + len(chunk) > max_chars:
+                remain = max_chars - total
+                if remain > 0:
+                    parts.append(chunk[:remain])
+                parts.append("\n\n[ТЕКСТ ОБРЕЗАН ПО ЛИМИТУ]")
+                break
+
+            parts.append(chunk)
+            total += len(chunk)
+
+        combined = "".join(parts).strip()
+
+        # ✅ DEBUG: проверяем, что реально склеилось
+        preview_len = 800
+        print("\n===== COMBINED TEXT STATS =====")
+        print("chars:", len(combined))
+        print("preview(first):")
+        print(combined[:preview_len])
+        print("preview(last):")
+        print(combined[-preview_len:] if len(combined) > preview_len else combined)
+
+        print("================================\n")
+
+        logger.info("Combined text chars=%s", len(combined))
+        logger.debug("Combined text preview(first %s): %s", preview_len, combined[:preview_len])
+        logger.debug("Combined text preview(last %s): %s", preview_len,
+                     combined[-preview_len:] if len(combined) > preview_len else combined)
+
+        return combined
+
+    def _sanitize_for_llm(self, text: str, max_chars: int = 25_000) -> str:
+        """
+        Агрессивная очистка + ограничение размера.
+        Убираем:
+        - управляющие символы
+        - мусорные последовательности
+        - слишком длинные строки/повторы
+        """
+        if not text:
+            return ""
+
+        # нормализуем переносы и пробелы
+        t = text.replace("\r\n", "\n").replace("\r", "\n")
+        t = re.sub(r"[ \t\f\v]+", " ", t)
+
+        # убираем control chars (кроме \n и \t)
+        t = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", " ", t)
+
+        # убираем “кракозябры” типа �
+        t = t.replace("\ufffd", " ")
+
+        # режем очень длинные “линии” (часто это мусор из PDF/сканов)
+        t = re.sub(r"[^\n]{2000,}", " ", t)
+
+        # схлопываем много одинаковых знаков подряд
+        t = re.sub(r"([=*_#\-])\1{8,}", r"\1\1\1", t)
+
+        # схлопываем множественные переносы
+        t = re.sub(r"\n{3,}", "\n\n", t)
+
+        t = t.strip()
+        if not t:
+            return ""
+
+        # ограничиваем размер: берём начало + конец (обычно в начале ТЗ, в конце приложения)
+        if len(t) > max_chars:
+            head = t[: int(max_chars * 0.7)]
+            tail = t[-int(max_chars * 0.3):]
+            t = head + "\n\n[...ОБРЕЗАНО...]\n\n" + tail
+
+        return t
+
+    def call_llm_lot_analysis(self, combined_text: str) -> dict:
+        """
+        Запрос в LLM. Возвращает dict:
+        { "goals_tasks": "...", "timelines": "...", "requirements": "..." }
+        """
+        api_key = (CONFIG.get("LLM_API_KEY") or os.environ.get("MISTRAL_API_KEY") or "").strip()
+        if not api_key:
+            raise RuntimeError("Не задан ключ LLM. Укажите CONFIG['LLM_API_KEY'] или переменную окружения MISTRAL_API_KEY")
+
+        url = (CONFIG.get("LLM_API_URL") or "https://api.mistral.ai/v1/chat/completions").strip()
+        model = (CONFIG.get("LLM_MODEL") or "mistral-large-latest").strip()
+
+        # Если документов нет/текст пустой — сразу вернём прочерки, без вызова API
+        if not combined_text:
+            return {
+                "goals_tasks": "—",
+                "timelines": "—",
+                "requirements": "—",
+            }
+
+        system_prompt = (
+            "Ты аналитик закупочной документации. Тебе дан текст из документов по одному лоту.\n\n"
+            "Задача: извлечь информацию ТОЛЬКО из текста. Нельзя додумывать и нельзя использовать знания вне текста.\n"
+            "Если конкретных данных нет — поставь ровно символ '—'.\n\n"
+
+            "Что нужно вернуть:\n"
+            "1) goals_tasks — кратко (1–3 предложения): предмет закупки / цель / что нужно сделать.\n"
+            "   Ищи формулировки типа: \"предмет договора\", \"объект закупки\", \"цель\", \"оказание услуг\", "
+            "\"выполнение работ\", \"поставка\".\n"
+            "2) timelines — сроки выполнения работ/оказания услуг/поставки.\n"
+            "   Ищи: даты (дд.мм.гггг), периоды (\"в течение N дней\", \"до ...\"), сроки этапов, срок действия договора.\n"
+            "   Если есть несколько сроков — перечисли кратко через точку с запятой.\n"
+            "3) requirements — ключевые требования к выполнению работ/услуг.\n"
+            "   Ищи: требования к качеству/результату, состав работ, требования к исполнителю, документы в заявке, "
+            "условия приемки, гарантии, требования к материалам/персоналу/опыту.\n"
+            "   Дай 3–7 пунктов через '; ' (без нумерации). Если требований нет — '—'.\n\n"
+
+            "Критично:\n"
+            "- Не извлекай НМЦК/цену, комиссии, реквизиты, если это не относится к срокам или требованиям.\n"
+            "- Не повторяй большие куски текста.\n"
+            "- Не придумывай адреса/даты/цифры.\n\n"
+
+            "Формат ответа: верни ТОЛЬКО валидный JSON-объект (без markdown, без пояснений), строго с ключами:\n"
+            "{\"goals_tasks\":\"...\",\"timelines\":\"...\",\"requirements\":\"...\"}"
+        )
+
+        safe_text = self._sanitize_for_llm(combined_text, max_chars=25_000)
+
+        print(f"[LLM INPUT] raw={len(combined_text)} chars, sanitized={len(safe_text)} chars")
+        logger.info("[LLM INPUT] raw=%s chars, sanitized=%s chars", len(combined_text), len(safe_text))
+
+        # ✅ ВЫВОД ПОЛНОГО ТЕКСТА, КОТОРЫЙ УЙДЕТ В МОДЕЛЬ
+        print("\n===== LLM INPUT TEXT BEGIN =====\n")
+        print(safe_text)
+        print("\n===== LLM INPUT TEXT END =====\n")
+
+        if not safe_text:
+            return {"goals_tasks": "—", "timelines": "—", "requirements": "—"}
+
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": safe_text},
+            ],
+            "temperature": 0.2,
+            "max_tokens": 800,
+        }
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            # КРИТИЧНО: не просим br, чтобы requests мог распаковать ответ
+            "Accept-Encoding": "gzip, deflate",
+        }
+
+        try:
+            resp = self.session.post(url, headers=headers, json=payload, timeout=CONFIG["REQUEST_TIMEOUT"])
+            resp.raise_for_status()
+        except requests.RequestException as e:
+            logger.warning("LLM request failed once: %s. Retrying...", e)
+            time.sleep(1.0)
+            resp = self.session.post(url, headers=headers, json=payload, timeout=CONFIG["REQUEST_TIMEOUT"])
+            resp.raise_for_status()
+
+        print("LLM HTTP status:", resp.status_code)
+        print("LLM content-type:", resp.headers.get("content-type"))
+        print("LLM content-encoding:", resp.headers.get("content-encoding"))
+        print("LLM first 200 bytes:", (resp.content or b"")[:200])
+        # 1) Безопасно читаем JSON ответа
+        try:
+            resp_json = resp.json()
+        except Exception as err:
+            print("\n===== LLM RESPONSE JSON ERROR =====")
+            print("Cannot parse response as JSON:", err)
+            print("Raw resp.text(first 2000):", (resp.text or "")[:2000])
+            print("===================================\n")
+            logger.warning("LLM response is not JSON: %s; text=%s", err, (resp.text or "")[:2000])
+            return {"goals_tasks": "—", "timelines": "—", "requirements": "—"}
+
+        # 2) Достаём content максимально аккуратно
+        content = ""
+        try:
+            content = (resp_json.get("choices", [{}])[0].get("message", {}).get("content") or "").strip()
+        except Exception:
+            content = ""
+
+        print("\n===== LLM RAW RESPONSE =====\n", content, "\n============================\n")
+        logger.info("LLM raw response len=%s", len(content))
+
+        # 3) Извлекаем JSON-объект из ответа (даже если вокруг текст/```json)
+        def _extract_json_object(text: str) -> dict:
+            if not text:
+                return {}
+
+            cleaned = text.strip()
+            cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+            cleaned = re.sub(r"\s*```$", "", cleaned)
+
+            l = cleaned.find("{")
+            r = cleaned.rfind("}")
+            if l == -1 or r == -1 or r <= l:
+                return {}
+
+            candidate = cleaned[l:r + 1].strip()
+            if not candidate:
+                return {}
+
+            try:
+                return json.loads(candidate)
+            except Exception as parse_err:
+                print("===== LLM JSON PARSE ERROR =====")
+                print(str(parse_err))
+                print("Candidate(first 2000):", candidate[:2000])
+                print("================================")
+                logger.warning("LLM JSON parse error: %s; candidate=%s", parse_err, candidate[:2000])
+                return {}
+
+        data = _extract_json_object(content)
+
+        print("\n===== LLM PARSED JSON =====\n", json.dumps(data, ensure_ascii=False, indent=2),
+              "\n===========================\n")
+        logger.info("LLM parsed json: %s", json.dumps(data, ensure_ascii=False))
+
+        def _norm(v: str) -> str:
+            v = (v or "").strip()
+            return v if v else "—"
+
+        return {
+            "goals_tasks": _norm(data.get("goals_tasks")),
+            "timelines": _norm(data.get("timelines")),
+            "requirements": _norm(data.get("requirements")),
+        }
 
     def _is_tektorg_allowed_doc_url(self, url: str) -> bool:
         try:
@@ -116,6 +368,23 @@ class ProcurementSearcher:
         except Exception:
             return False, ""
 
+    def _looks_like_garbage_text(self, text: str) -> bool:
+        """
+        Простая эвристика: если почти нет букв (кириллица/латиница),
+        то это похоже на бинарный мусор после decode().
+        """
+        if not text:
+            return True
+
+        t = text.strip()
+        if len(t) < 50:
+            return True
+
+        letters = sum(1 for ch in t if ch.isalpha())
+        ratio = letters / max(len(t), 1)
+
+        # если букв меньше ~12% — это почти наверняка мусор
+        return ratio < 0.12
     def __init__(self, sources: list[ProcurementSource] | None = None):
         self.session = self._create_session()
         # По умолчанию используем все доступные источники
@@ -145,7 +414,7 @@ class ProcurementSearcher:
                 "User-Agent": CONFIG["USER_AGENT"],
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
                 "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
-                "Accept-Encoding": "gzip, deflate, br",
+                "Accept-Encoding": "gzip, deflate",
                 "Connection": "keep-alive",
                 "Upgrade-Insecure-Requests": "1",
                 "Sec-Fetch-Dest": "document",
@@ -1101,6 +1370,14 @@ class ProcurementSearcher:
                 text = self._extract_text_from_xls(content)
                 if text:
                     return text
+
+            # Если это PDF, а нормального PDF-парсера нет — не пытаемся decode(), иначе будет мусор
+            if content[:4] == b"%PDF":
+                return ""
+
+            # Если много нулевых байт — это бинарь, не текст
+            if b"\x00" in content[:4096]:
+                return ""
 
             # 5. Всё остальное (PDF, DOC, RTF и т.п.) — грубый универсальный метод
             # Сначала пробуем UTF-8, чтобы не сломать кириллицу, даже если формат распознан неверно.
