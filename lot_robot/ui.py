@@ -509,6 +509,7 @@ class ProcurementApp:
             return
 
         lot_title = values[0]
+        lot_price_str = values[1]  # ✅ Цена из таблицы
         lot_source = values[2]
         lot_url = values[3]
 
@@ -518,18 +519,27 @@ class ProcurementApp:
 
         thread = threading.Thread(
             target=self._perform_lot_report,
-            args=(lot_title, lot_url, lot_source),
+            args=(lot_title, lot_url, lot_source, lot_price_str),
             daemon=True,
         )
         thread.start()
 
-    def _perform_lot_report(self, lot_title: str, lot_url: str, lot_source: str):
+    def _perform_lot_report(self, lot_title: str, lot_url: str, lot_source: str, lot_price_str: str):
         def update_progress(message):
             self.root.after(0, lambda: self.progress_var.set(message))
 
         self.root.after(0, lambda: self.progress_bar.start())
 
         try:
+            # ✅ Общая информация: дедлайн + цена из таблицы
+            update_progress("Получение срока окончания подачи заявок...")
+            lot_deadline = self.searcher.get_application_deadline(lot_url) or "—"
+
+            lot_price = (lot_price_str or "").strip()
+            if not lot_price:
+                lot_price = "Не указана"
+
+            # ✅ Документы + LLM
             update_progress("Скачивание документов лота...")
             documents = self.searcher.download_documents(lot_url, update_progress)
 
@@ -549,6 +559,8 @@ class ProcurementApp:
                     lot_title=lot_title,
                     lot_url=lot_url,
                     lot_source=lot_source,
+                    lot_price=lot_price,
+                    lot_deadline=lot_deadline,
                     documents=documents,
                     llm_data=llm_data,
                 ),
@@ -568,7 +580,8 @@ class ProcurementApp:
             self.root.after(0, lambda: self.progress_bar.stop())
 
     def _show_lot_report_window(self, lot_title: str, lot_url: str, lot_source: str,
-                               documents: list[dict], llm_data: dict):
+                                lot_price: str, lot_deadline: str,
+                                documents: list[dict], llm_data: dict):
         win = tk.Toplevel(self.root)
         win.title("Отчет по лоту")
         win.geometry("900x650")
@@ -586,7 +599,9 @@ class ProcurementApp:
         text_widget.insert(tk.END, "1) ОБЩАЯ ИНФОРМАЦИЯ\n", "subtitle")
         text_widget.insert(tk.END, f"Наименование лота: {lot_title}\n")
         text_widget.insert(tk.END, f"Ссылка: {lot_url}\n")
-        text_widget.insert(tk.END, f"Площадка: {lot_source}\n\n")
+        text_widget.insert(tk.END, f"Площадка: {lot_source}\n")
+        text_widget.insert(tk.END, f"Стоимость: {lot_price}\n")
+        text_widget.insert(tk.END, f"Окончание подачи заявок: {lot_deadline}\n\n")
 
         # 2) Аналитика документов
         text_widget.insert(tk.END, "2) АНАЛИТИКА ДОКУМЕНТОВ\n", "subtitle")
@@ -656,6 +671,7 @@ class ProcurementApp:
             self._show_analysis_results(documents, analysis_results, keywords)
 
         self.root.after(0, lambda: self.progress_bar.start())
+
 
         try:
             update_progress("Поиск и скачивание документов...")
