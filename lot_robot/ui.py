@@ -551,7 +551,12 @@ class ProcurementApp:
                 llm_data = self.searcher.call_llm_lot_analysis(combined_text)
             except Exception as err:
                 logger.warning("LLM analysis failed, fallback to dashes: %s", err)
-                llm_data = {"goals_tasks": "—", "timelines": "—", "requirements": "—"}
+                llm_data = {
+                    "subject": "—",
+                    "work_scope": "—",
+                    "work_and_submission_timelines": "Сроки работ: —; Сроки подачи: —",
+                    "fit_summary": "—",
+                }
 
             self.root.after(
                 0,
@@ -607,9 +612,11 @@ class ProcurementApp:
         text_widget.insert(tk.END, "2) АНАЛИТИКА ДОКУМЕНТОВ\n", "subtitle")
         text_widget.insert(tk.END, f"Всего документов: {len(documents)}\n\n")
 
-        text_widget.insert(tk.END, f"Цели и задачи лота: {llm_data.get('goals_tasks','—')}\n\n")
-        text_widget.insert(tk.END, f"Сроки выполнения: {llm_data.get('timelines','—')}\n\n")
-        text_widget.insert(tk.END, f"Требования к выполнению работ: {llm_data.get('requirements','—')}\n\n")
+        text_widget.insert(tk.END, f"Предмет закупки: {llm_data.get('subject', '—')}\n\n")
+        text_widget.insert(tk.END, f"Состав работ/услуг: {llm_data.get('work_scope', '—')}\n\n")
+        text_widget.insert(tk.END,
+                           f"Сроки работ и подачи: {llm_data.get('work_and_submission_timelines', 'Сроки работ: —; Сроки подачи: —')}\n\n")
+        text_widget.insert(tk.END, f"Итоговое резюме (насколько подходит): {llm_data.get('fit_summary', '—')}\n\n")
 
         # список документов
         text_widget.insert(tk.END, "СПИСОК ДОКУМЕНТОВ\n", "subtitle")
