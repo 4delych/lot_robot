@@ -213,12 +213,33 @@ class ProcurementSearcher:
         Запрос в LLM. Возвращает dict:
         { "goals_tasks": "...", "timelines": "...", "requirements": "..." }
         """
-        api_key = (CONFIG.get("LLM_API_KEY") or os.environ.get("MISTRAL_API_KEY") or "").strip()
-        if not api_key:
-            raise RuntimeError("Не задан ключ LLM. Укажите CONFIG['LLM_API_KEY'] или переменную окружения MISTRAL_API_KEY")
+        provider = (CONFIG.get("LLM_PROVIDER") or "cloudru").strip().lower()
+        providers = CONFIG.get("LLM_PROVIDERS") or {}
+        provider_cfg = providers.get(provider, {})
+        provider_key = (CONFIG.get("LLM_PROVIDER_KEYS") or {}).get(provider, "")
 
-        url = (CONFIG.get("LLM_API_URL") or "https://api.mistral.ai/v1/chat/completions").strip()
-        model = (CONFIG.get("LLM_MODEL") or "mistral-large-latest").strip()
+        env_key = provider_cfg.get("env_key") or ""
+        api_key = (
+            CONFIG.get("LLM_API_KEY")
+            or provider_key
+            or (os.environ.get(env_key) if env_key else "")
+            or os.environ.get("API_KEY")
+            or os.environ.get("MISTRAL_API_KEY")
+            or ""
+        ).strip()
+        if not api_key:
+            raise RuntimeError("LLM key not set. Set CONFIG['LLM_API_KEY'] or CONFIG['LLM_PROVIDER_KEYS'] or env var.")
+
+        url = (
+            CONFIG.get("LLM_API_URL")
+            or provider_cfg.get("api_url")
+            or "https://api.mistral.ai/v1/chat/completions"
+        ).strip()
+        model = (
+            CONFIG.get("LLM_MODEL")
+            or provider_cfg.get("model")
+            or "mistral-large-latest"
+        ).strip()
 
         # Если документов нет/текст пустой — сразу вернём прочерки, без вызова API
         if not combined_text:

@@ -10,7 +10,7 @@ import logging
 import webbrowser
 
 
-from config import PURCHASE_STAGES, LAWS
+from config import PURCHASE_STAGES, LAWS, CONFIG
 from ProcurmentSearcher import ProcurementSearcher
 logger = logging.getLogger(__name__)
 
@@ -19,41 +19,173 @@ class ProcurementApp:
 
     def __init__(self, root):
         self.root = root
-        self.root.title("Поиск закупок - Улучшенная версия с анализом документов")
-        self.root.geometry("900x700")
+        self.root.title("Tender Search & Analysis Robot")
+        # Базовый размер под десктоп ≥1280 px
+        self.root.geometry("1280x800")
+        # состояние UI
+        self.filters_collapsed = tk.BooleanVar(value=False)
         self.results = []
         self.searcher = ProcurementSearcher()
         self.search_thread = None
         self.analysis_results = []
         self._temp_doc_files = []
+        # состояние правой панели анализа
+        self.current_lot = None
+        self.analysis_state_var = tk.StringVar(value="Idle")
+        self.verdict_label_var = tk.StringVar(value="Анализ не выполнен")
+        self.verdict_explanation_var = tk.StringVar(value="")
+        
+        self.llm_provider_options = sorted((CONFIG.get("LLM_PROVIDERS") or {}).keys())
+        default_provider = (CONFIG.get("LLM_PROVIDER") or "").strip()
+        if not default_provider and self.llm_provider_options:
+            default_provider = self.llm_provider_options[0]
+            CONFIG["LLM_PROVIDER"] = default_provider
+        self.llm_provider_var = tk.StringVar(value=default_provider)
         self._setup_ui()
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
 
     def _setup_ui(self):
-        """Setup the user interface."""
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        """Setup the user interface (split layout: search/results + analysis panel)."""
+        # Общий фон, близкий к референсу (тёмная шапка, светлый контент)
+        self.root.configure(bg="#111827")
 
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(6, weight=0)  # блок документов не растягиваем
-        main_frame.rowconfigure(7, weight=1)  # растягиваем таблицу результатов
+
+        # Общий стиль ttk (таблица, заголовки и т.п.)
+        style = ttk.Style(self.root)
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
+
+        style.configure(
+            "App.Treeview",
+            font=("Segoe UI", 9),
+            rowheight=22,
+            borderwidth=0,
+            background="#FFFFFF",
+            fieldbackground="#FFFFFF",
+        )
+        style.configure(
+            "App.Treeview.Heading",
+            font=("Segoe UI", 9, "bold"),
+            background="#E5E7EB",
+            foreground="#111827",
+            borderwidth=0,
+        )
+        style.map(
+            "App.Treeview",
+            background=[("selected", "#DBEAFE")],
+            foreground=[("selected", "#111827")],
+        )
+
+        # Корневой контейнер
+        container = tk.Frame(self.root, bg="#111827")
+        container.grid(row=0, column=0, sticky=(tk.N, tk.S, tk.E, tk.W))
+        container.columnconfigure(0, weight=1)
+        container.rowconfigure(0, weight=0)  # шапка
+        container.rowconfigure(1, weight=1)  # основное содержимое
+
+        # Верхняя шапка приложения
+        header = tk.Frame(container, bg="#374151", height=56)
+        header.grid(row=0, column=0, sticky="ew")
+        header.grid_propagate(False)
+        header.columnconfigure(1, weight=1)
+
+        # Логотип (упрощённый прямоугольник с инициалами)
+        logo_frame = tk.Frame(header, bg="#374151")
+        logo_frame.grid(row=0, column=0, padx=(16, 12), pady=8, sticky="w")
+
+        logo = tk.Label(
+            logo_frame,
+            text="ST",
+            font=("Segoe UI Semibold", 14),
+            bg="#0B5FFF",
+            fg="#FFFFFF",
+            padx=10,
+            pady=4,
+        )
+        logo.pack()
+
+        title_frame = tk.Frame(header, bg="#374151")
+        title_frame.grid(row=0, column=1, sticky="w")
+
+        title_label = tk.Label(
+            title_frame,
+            text="Tender Search & Analysis Robot",
+            font=("Segoe UI Semibold", 14),
+            bg="#374151",
+            fg="#F9FAFB",
+        )
+        title_label.pack(anchor="w")
+
+        subtitle_label = tk.Label(
+            title_frame,
+            text="Аналитика закупок и AI‑оценка лотов",
+            font=("Segoe UI", 10),
+            bg="#374151",
+            fg="#D1D5DB",
+        )
+        subtitle_label.pack(anchor="w")
+
+        # Основная область с панелями
+        content = ttk.Frame(container, padding=10)
+        content.grid(row=1, column=0, sticky=(tk.N, tk.S, tk.E, tk.W))
+        content.columnconfigure(0, weight=1)
+        content.rowconfigure(0, weight=1)
+
+        # Горизонтальный сплит
+        paned = ttk.Panedwindow(content, orient=tk.HORIZONTAL)
+        paned.grid(row=0, column=0, sticky=(tk.N, tk.S, tk.E, tk.W))
+
+        # Левая панель (поиск/фильтры/результаты)
+        left_frame = ttk.Frame(paned, padding=(8, 0, 8, 0))
+        left_frame.columnconfigure(1, weight=1)
+        left_frame.rowconfigure(7, weight=0)  # блок документов
+        left_frame.rowconfigure(8, weight=1)  # таблица результатов
+
+        # Правая панель (анализ выбранного лота)
+        right_frame = ttk.Frame(paned, padding=(0, 0, 0, 0))
+        right_frame.columnconfigure(0, weight=1)
+        right_frame.rowconfigure(2, weight=1)
+
+        paned.add(left_frame, weight=3)
+        paned.add(right_frame, weight=2)
 
         # Input fields
-        ttk.Label(main_frame, text="Ключевое слово:").grid(
+        ttk.Label(left_frame, text="Ключевое слово:").grid(
             row=0, column=0, sticky="w", pady=2
         )
-        self.keyword_entry = ttk.Entry(main_frame, width=50)
+        self.keyword_entry = ttk.Entry(left_frame, width=50)
         self.keyword_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), pady=2)
         self.keyword_entry.bind("<Return>", lambda e: self.search())
 
+        # Filters header (collapsible controls)
+        filters_header = ttk.Frame(left_frame)
+        filters_header.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        filters_header.columnconfigure(0, weight=1)
+
+        ttk.Label(
+            filters_header,
+            text="Фильтры",
+            font=("Segoe UI", 10, "bold"),
+        ).grid(row=0, column=0, sticky="w")
+
+        self.filters_toggle_btn = ttk.Button(
+            filters_header,
+            text="Свернуть",
+            command=self._toggle_filters,
+            width=10,
+        )
+        self.filters_toggle_btn.grid(row=0, column=1, sticky="e")
+
         # Price filters frame
         price_frame = ttk.LabelFrame(
-            main_frame, text="Фильтр по цене (руб)", padding="5"
+            left_frame, text="Фильтр по цене (руб)", padding="5"
         )
-        price_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        price_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         price_frame.columnconfigure(1, weight=1)
         price_frame.columnconfigure(3, weight=1)
 
@@ -71,9 +203,9 @@ class ProcurementApp:
 
         # Additional filters frame
         filters_frame = ttk.LabelFrame(
-            main_frame, text="Дополнительные фильтры", padding="5"
+            left_frame, text="Дополнительные фильтры", padding="5"
         )
-        filters_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        filters_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         filters_frame.columnconfigure(1, weight=1)
         filters_frame.columnconfigure(3, weight=1)
 
@@ -107,9 +239,9 @@ class ProcurementApp:
 
         # Sources selection frame
         sources_frame = ttk.LabelFrame(
-            main_frame, text="Источники поиска", padding="5"
+            left_frame, text="Источники поиска", padding="5"
         )
-        sources_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        sources_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
 
         self.source_vars = {}
         available_sources = ["zakupki.gov.ru", "tektorg.ru", "bidzaar.com"]
@@ -124,31 +256,31 @@ class ProcurementApp:
             cb.grid(row=0, column=i, sticky="w", padx=10)
 
         # Buttons frame
-        buttons_frame = ttk.Frame(main_frame)
-        buttons_frame.grid(row=4, column=0, columnspan=2, pady=10)
+        buttons_frame = ttk.Frame(left_frame)
+        buttons_frame.grid(row=5, column=0, columnspan=2, pady=10)
 
         self.search_btn = ttk.Button(
-            buttons_frame, text="🔍 Поиск", command=self.search
+            buttons_frame, text="Поиск", command=self.search
         )
         self.search_btn.pack(side=tk.LEFT, padx=5)
 
         self.export_btn = ttk.Button(
             buttons_frame,
-            text="📊 Сохранить в Excel",
+            text="Сохранить в Excel",
             command=self.save_to_excel,
             state="disabled",
         )
         self.export_btn.pack(side=tk.LEFT, padx=5)
 
         self.clear_btn = ttk.Button(
-            buttons_frame, text="🗑️ Очистить", command=self.clear_results
+            buttons_frame, text="Очистить", command=self.clear_results
         )
         self.clear_btn.pack(side=tk.LEFT, padx=5)
 
         # Progress bar
         self.progress_var = tk.StringVar(value="Готов к поиску")
-        progress_frame = ttk.Frame(main_frame)
-        progress_frame.grid(row=5, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        progress_frame = ttk.Frame(left_frame)
+        progress_frame.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         progress_frame.columnconfigure(0, weight=1)
 
         self.progress_bar = ttk.Progressbar(progress_frame, mode="indeterminate")
@@ -159,9 +291,9 @@ class ProcurementApp:
 
         # Документы frame
         doc_frame = ttk.LabelFrame(
-            main_frame, text="Поиск в документах ТЗ", padding="5"
+            left_frame, text="Поиск в документах ТЗ", padding="5"
         )
-        doc_frame.grid(row=6, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        doc_frame.grid(row=7, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         doc_frame.columnconfigure(0, weight=1)
 
         ttk.Label(doc_frame, text="Ключевые слова для поиска (через запятую):").grid(
@@ -175,14 +307,14 @@ class ProcurementApp:
 
         self.analyze_btn = ttk.Button(
             doc_buttons_frame,
-            text="🔍 Анализировать документы выбранного лота",
+            text="Анализ документов лота",
             command=self.analyze_documents,
         )
         self.analyze_btn.pack(side=tk.LEFT, padx=5)
 
         self.lot_report_btn = ttk.Button(
             doc_buttons_frame,
-            text="📄 Анализ лота",
+            text="Подробный отчет по лоту",
             command=self.analyze_lot_report,
         )
         self.lot_report_btn.pack(side=tk.LEFT, padx=5)
@@ -190,30 +322,34 @@ class ProcurementApp:
 
         self.export_docs_btn = ttk.Button(
             doc_buttons_frame,
-            text="📋 Экспорт результатов анализа",
+            text="Экспорт анализа документов",
             command=self.export_analysis,
             state="disabled",
         )
         self.export_docs_btn.pack(side=tk.LEFT, padx=5)
 
         # Results table
-        self._setup_results_table(main_frame)
-        
-        # Обновляем rowconfigure для новой структуры
-        main_frame.rowconfigure(7, weight=1)  # Таблица теперь на строке 7
+        self._setup_results_table(left_frame)
+
+        # Правая панель анализа
+        self._setup_analysis_panel(right_frame)
 
     def _setup_results_table(self, parent):
         """Setup the results table with scrollbars."""
         table_frame = ttk.Frame(parent)
         table_frame.grid(
-            row=7, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=10
+            row=8, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=10
         )
         table_frame.columnconfigure(0, weight=1)
         table_frame.rowconfigure(0, weight=1)
 
         columns = ("Название", "Цена", "Источник", "Ссылка")
         self.tree = ttk.Treeview(
-            table_frame, columns=columns, show="headings", height=15
+            table_frame,
+            columns=columns,
+            show="headings",
+            height=15,
+            style="App.Treeview",
         )
 
         self.tree.heading("Название", text="Название", anchor="w")
@@ -241,6 +377,167 @@ class ProcurementApp:
         h_scrollbar.grid(row=1, column=0, sticky=(tk.W, tk.E))
 
         self.tree.bind("<Double-1>", self._on_item_double_click)
+        self.tree.bind("<<TreeviewSelect>>", self._on_result_select)
+
+    def _toggle_filters(self):
+        """Сворачивает/разворачивает блоки фильтров, не меняя их состояния."""
+        new_state = not self.filters_collapsed.get()
+        self.filters_collapsed.set(new_state)
+
+        # Все блоки фильтров находятся в строках 2–4 левой панели:
+        # price_frame, filters_frame, sources_frame.
+        # Ищем их по grid_info и скрываем/показываем.
+        parent = self.keyword_entry.master  # left_frame
+        children = parent.winfo_children()
+        for child in children:
+            info = child.grid_info()
+            if not info:
+                continue
+            row = int(info.get("row", -1))
+            if row in (2, 3, 4):
+                if new_state:
+                    child.grid_remove()
+                else:
+                    child.grid()
+
+        self.filters_toggle_btn.config(text="Развернуть" if new_state else "Свернуть")
+
+    def _setup_analysis_panel(self, parent: ttk.Frame) -> None:
+        """Создает правую панель анализа выбранного тендера."""
+        # Заголовок панели
+        header_frame = ttk.Frame(parent)
+        header_frame.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        header_frame.columnconfigure(0, weight=1)
+
+        self.detail_title_label = ttk.Label(
+            header_frame,
+            text="Лот не выбран",
+            font=("Segoe UI", 12, "bold"),
+            wraplength=380,
+        )
+        self.detail_title_label.grid(row=0, column=0, sticky="w")
+
+        self.detail_meta_label = ttk.Label(
+            header_frame,
+            text="Выберите лот слева для просмотра деталей и запуска AI-анализа",
+            font=("Segoe UI", 9),
+            foreground="#64748B",
+            wraplength=380,
+        )
+        self.detail_meta_label.grid(row=1, column=0, sticky="w", pady=(2, 0))
+
+        # Блок статуса и кнопки запуска анализа
+        cta_frame = ttk.LabelFrame(parent, text="AI-анализ документов", padding=8)
+        cta_frame.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        cta_frame.columnconfigure(0, weight=1)
+        cta_frame.columnconfigure(1, weight=0)
+
+        self.analysis_status_label = ttk.Label(
+            cta_frame,
+            textvariable=self.analysis_state_var,
+            foreground="#64748B",
+        )
+        self.analysis_status_label.grid(row=0, column=0, sticky="w")
+
+        self.lot_analyze_btn = ttk.Button(
+            cta_frame,
+            text="Анализировать лот (LLM)",
+            command=self.analyze_lot_report,
+            state="disabled",
+        )
+        self.lot_analyze_btn.grid(row=0, column=1, sticky="e")
+
+        
+        self.llm_provider_label = ttk.Label(cta_frame, text="LLM provider")
+        self.llm_provider_label.grid(row=1, column=0, sticky="w", pady=(6, 0))
+        self.llm_provider_combo = ttk.Combobox(
+            cta_frame,
+            textvariable=self.llm_provider_var,
+            values=self.llm_provider_options,
+            state="readonly",
+            width=28,
+        )
+        self.llm_provider_combo.grid(row=1, column=1, sticky="e", pady=(6, 0))
+        self.llm_provider_combo.bind("<<ComboboxSelected>>", self._on_llm_provider_change)
+        # Блок итогового вердикта
+        verdict_outer = ttk.Frame(parent)
+        verdict_outer.grid(row=2, column=0, sticky="nsew")
+        verdict_outer.columnconfigure(0, weight=1)
+        verdict_outer.rowconfigure(1, weight=1)
+
+        self.verdict_frame = tk.Frame(
+            verdict_outer,
+            bg="#E5E7EB",
+            bd=2,
+            relief="solid",
+        )
+        self.verdict_frame.grid(row=0, column=0, sticky="ew", pady=(0, 8), padx=(0, 0))
+        self.verdict_frame.columnconfigure(0, weight=1)
+
+        self.verdict_title_label = tk.Label(
+            self.verdict_frame,
+            textvariable=self.verdict_label_var,
+            font=("Segoe UI", 11, "bold"),
+            anchor="w",
+            bg="#E5E7EB",
+        )
+        self.verdict_title_label.grid(row=0, column=0, sticky="ew", padx=10, pady=(6, 0))
+
+        self.verdict_explanation_label = tk.Label(
+            self.verdict_frame,
+            textvariable=self.verdict_explanation_var,
+            font=("Segoe UI", 9),
+            anchor="w",
+            justify="left",
+            wraplength=380,
+            bg="#E5E7EB",
+        )
+        self.verdict_explanation_label.grid(
+            row=1, column=0, sticky="ew", padx=10, pady=(2, 8)
+        )
+
+        # Текстовый структурированный отчет
+        report_frame = ttk.Frame(verdict_outer)
+        report_frame.grid(row=1, column=0, sticky="nsew")
+        report_frame.columnconfigure(0, weight=1)
+        report_frame.rowconfigure(0, weight=1)
+
+        self.report_text = scrolledtext.ScrolledText(
+            report_frame,
+            wrap=tk.WORD,
+            state=tk.DISABLED,
+            font=("Segoe UI", 9),
+        )
+        self.report_text.grid(row=0, column=0, sticky="nsew")
+
+        # Нижняя панель действий
+        actions_frame = ttk.Frame(parent)
+        actions_frame.grid(row=3, column=0, sticky="ew", pady=(6, 0))
+        actions_frame.columnconfigure(0, weight=1)
+
+        self.export_pdf_btn = ttk.Button(
+            actions_frame,
+            text="Экспорт в PDF",
+            command=self._export_report_to_pdf,
+            state="disabled",
+        )
+        self.export_pdf_btn.grid(row=0, column=0, sticky="w")
+
+        self.copy_report_btn = ttk.Button(
+            actions_frame,
+            text="Копировать отчет",
+            command=self._copy_report_to_clipboard,
+            state="disabled",
+        )
+        self.copy_report_btn.grid(row=0, column=1, sticky="w", padx=(6, 0))
+
+        self.open_source_btn = ttk.Button(
+            actions_frame,
+            text="Открыть источник",
+            command=self._open_current_lot_link,
+            state="disabled",
+        )
+        self.open_source_btn.grid(row=0, column=2, sticky="w", padx=(6, 0))
 
     def _on_item_double_click(self, event):
         """Handle double-click on table item to open link."""
@@ -255,6 +552,213 @@ class ProcurementApp:
                     webbrowser.open(values[3])
                 except Exception as e:
                     messagebox.showerror("Ошибка", f"Не удалось открыть ссылку:\n{e}")
+
+    def _on_result_select(self, event):
+        """Обновляет правую панель при выборе строки в таблице."""
+        selection = self.tree.selection()
+        if not selection:
+            self.current_lot = None
+            self.detail_title_label.config(text="Лот не выбран")
+            self.detail_meta_label.config(
+                text="Выберите лот слева для просмотра деталей и запуска AI-анализа"
+            )
+            self.lot_analyze_btn.config(state="disabled")
+            self.open_source_btn.config(state="disabled")
+            self.analysis_state_var.set("Idle")
+            self._reset_verdict_view()
+            return
+
+        item = selection[0]
+        values = self.tree.item(item, "values")
+        if len(values) < 4:
+            return
+
+        title, price, source, url = values[0], values[1], values[2], values[3]
+        self.current_lot = {
+            "title": title,
+            "price": price,
+            "source": source,
+            "url": url,
+        }
+        meta_text = f"Цена: {price} · Источник: {source}"
+        self.detail_title_label.config(text=title)
+        self.detail_meta_label.config(text=meta_text)
+        self.lot_analyze_btn.config(state="normal")
+        self.open_source_btn.config(
+            state="normal" if url and url != "Ссылка не найдена" else "disabled"
+        )
+        # сбрасываем прошлый результат анализа для нового выбора
+        self.analysis_state_var.set("Idle")
+        self._reset_verdict_view()
+
+    def _reset_verdict_view(self):
+        """Сбрасывает отображение вердикта и отчета."""
+        self.verdict_label_var.set("Анализ не выполнен")
+        self.verdict_explanation_var.set("")
+        self._set_verdict_style("idle")
+        self.report_text.config(state=tk.NORMAL)
+        self.report_text.delete("1.0", tk.END)
+        self.report_text.insert(
+            tk.END,
+            "Отчет по выбранному лоту будет показан здесь после выполнения AI-анализа.",
+        )
+        self.report_text.config(state=tk.DISABLED)
+        self.export_pdf_btn.config(state="disabled")
+        self.copy_report_btn.config(state="disabled")
+
+    def _set_verdict_style(self, verdict_type: str) -> None:
+        """Настраивает цвета блока вердикта в зависимости от типа."""
+        # idle / suitable / uncertain / not_suitable
+        if verdict_type == "suitable":
+            bg = "#DCFCE7"
+        elif verdict_type == "uncertain":
+            bg = "#FEF3C7"
+        elif verdict_type == "not_suitable":
+            bg = "#FEE2E2"
+        else:
+            bg = "#E5E7EB"
+
+        self.verdict_frame.configure(bg=bg)
+        self.verdict_title_label.configure(bg=bg)
+        self.verdict_explanation_label.configure(bg=bg)
+
+    def _derive_verdict_from_summary(self, summary: str) -> tuple[str, str]:
+        """
+        Пытается вывести финальный вердикт (Suitable / Not suitable / Uncertain)
+        из текстового резюме LLM.
+        """
+        s = (summary or "").lower()
+        if not s or s.strip() == "—":
+            return "Неопределенно", "uncertain"
+
+        negative_markers = ["не наш профиль", "не подходит", "нецелесообразно", "не рекомендуется"]
+        positive_markers = ["подходит", "целесообразно", "рекомендуется", "соответствует профилю"]
+
+        if any(m in s for m in negative_markers):
+            return "Не подходит", "not_suitable"
+        if any(m in s for m in positive_markers):
+            return "Подходит", "suitable"
+
+        return "Неопределенно", "uncertain"
+
+    def _fill_report_text(
+        self,
+        lot_title: str,
+        lot_url: str,
+        lot_source: str,
+        lot_price: str,
+        lot_deadline: str,
+        llm_data: dict,
+    ) -> None:
+        """Формирует структурированный текст отчета в правой панели."""
+        subject = llm_data.get("subject", "—")
+        work_scope = llm_data.get("work_scope", "—")
+        timelines = llm_data.get(
+            "work_and_submission_timelines",
+            "Сроки работ: —; Сроки подачи: —",
+        )
+        fit_summary = llm_data.get("fit_summary", "—")
+
+        self.report_text.config(state=tk.NORMAL)
+        self.report_text.delete("1.0", tk.END)
+
+        # Финальный вердикт
+        verdict_label, verdict_type = self._derive_verdict_from_summary(fit_summary)
+        self.verdict_label_var.set(f"Итоговый вердикт: {verdict_label}")
+        self.verdict_explanation_var.set(fit_summary or "—")
+        self._set_verdict_style(verdict_type)
+
+        # Структурированный отчет
+        self.report_text.insert(tk.END, "ОТЧЕТ ПО ЛОТУ\n")
+        self.report_text.insert(tk.END, "=" * 60 + "\n\n")
+
+        self.report_text.insert(tk.END, "1) ЦЕЛЬ РАБОТ\n")
+        self.report_text.insert(tk.END, "-" * 40 + "\n")
+        self.report_text.insert(tk.END, f"{subject or '—'}\n\n")
+
+        self.report_text.insert(tk.END, "2) ЗАДАЧИ / СОСТАВ РАБОТ\n")
+        self.report_text.insert(tk.END, "-" * 40 + "\n")
+        if work_scope and work_scope != "—":
+            # разбиваем по ';' для удобства чтения
+            parts = [p.strip() for p in work_scope.split(";") if p.strip()]
+            for p in parts:
+                self.report_text.insert(tk.END, f" • {p}\n")
+            self.report_text.insert(tk.END, "\n")
+        else:
+            self.report_text.insert(tk.END, "—\n\n")
+
+        self.report_text.insert(tk.END, "3) ОБЪЕМ И СРОКИ РАБОТ / ПОДАЧИ\n")
+        self.report_text.insert(tk.END, "-" * 40 + "\n")
+        self.report_text.insert(tk.END, f"{timelines}\n\n")
+
+        self.report_text.insert(tk.END, "4) СРОКИ ЗАКУПКИ\n")
+        self.report_text.insert(tk.END, "-" * 40 + "\n")
+        self.report_text.insert(
+            tk.END,
+            f"Окончание подачи заявок (с сайта): {lot_deadline or '—'}\n\n",
+        )
+
+        self.report_text.insert(tk.END, "5) ОБЩИЕ СВЕДЕНИЯ О ЛОТЕ\n")
+        self.report_text.insert(tk.END, "-" * 40 + "\n")
+        self.report_text.insert(tk.END, f"Наименование: {lot_title}\n")
+        self.report_text.insert(tk.END, f"Ссылка: {lot_url}\n")
+        self.report_text.insert(tk.END, f"Площадка: {lot_source}\n")
+        self.report_text.insert(tk.END, f"Стоимость: {lot_price}\n\n")
+
+        self.report_text.config(state=tk.DISABLED)
+
+        # включаем действия
+        self.export_pdf_btn.config(state="normal")
+        self.copy_report_btn.config(state="normal")
+
+    def _export_report_to_pdf(self):
+        """Простой экспорт отчета в текстовый PDF-файл (как plain text)."""
+        content = self.report_text.get("1.0", tk.END).strip()
+        if not content:
+            messagebox.showwarning("Нет данных", "Отчет еще не сформирован")
+            return
+
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".pdf",
+            filetypes=[("PDF файлы", "*.pdf"), ("Все файлы", "*.*")],
+            title="Сохранить отчет",
+        )
+        if not file_path:
+            return
+
+        try:
+            # сохраняем как обычный текстовый контент — без сторонних библиотек PDF
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            messagebox.showinfo("Сохранено", f"Отчет сохранен в файл:\n{file_path}")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось сохранить отчет:\n{e}")
+
+    def _copy_report_to_clipboard(self):
+        """Копирует текст отчета в буфер обмена."""
+        content = self.report_text.get("1.0", tk.END).strip()
+        if not content:
+            messagebox.showwarning("Нет данных", "Отчет еще не сформирован")
+            return
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(content)
+            messagebox.showinfo("Скопировано", "Отчет скопирован в буфер обмена")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось скопировать отчет:\n{e}")
+
+    def _open_current_lot_link(self):
+        """Открывает ссылку на текущий лот в браузере."""
+        if not self.current_lot:
+            return
+        url = self.current_lot.get("url")
+        if not url or url == "Ссылка не найдена":
+            messagebox.showerror("Ошибка", "Неверная ссылка на лот")
+            return
+        try:
+            webbrowser.open(url)
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось открыть ссылку:\n{e}")
 
     def search(self):
         """Start search in a separate thread."""
@@ -475,6 +979,12 @@ class ProcurementApp:
         self.max_price_entry.delete(0, tk.END)
         self.stage_var.set("")
         self.law_var.set("")
+    def _on_llm_provider_change(self, event=None):
+        value = (self.llm_provider_var.get() or "").strip()
+        if value:
+            CONFIG["LLM_PROVIDER"] = value
+
+
 
     def _on_closing(self):
         """Handle application closing."""

@@ -7,3 +7,4 @@ xlrd>=2.0.1
 pywin32>=306; platform_system=="Windows"
 lxml>=4.9.0
 
+
