@@ -14,7 +14,7 @@ CONFIG["LLM_PROVIDER_KEYS"] = {
     "cloudru": "OWMyYjA4ZjItNGY2Ni00OTNjLWJlMmUtN2Y5YTI1MjYwYWNi.9b5fe2f4b7aa0c1358219ee59f9b2b25",
     "vsellm_yandex": "sk-FazTRmiqKGjpZwRob5lvRw",
     "vsellm_deepseek": "sk-FazTRmiqKGjpZwRob5lvRw",
-    "mistral": "",
+    "mistral": "cCT8j22cdaqVFZGceW5iAigM1ULuIz0S",
 }
 CONFIG["LLM_PROVIDERS"] = {
     "cloudru": {

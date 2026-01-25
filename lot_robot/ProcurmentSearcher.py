@@ -342,12 +342,22 @@ class ProcurementSearcher:
         }
 
         try:
-            resp = self.session.post(url, headers=headers, json=payload, timeout=CONFIG["REQUEST_TIMEOUT"])
+            resp = self.session.post(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=CONFIG.get("LLM_REQUEST_TIMEOUT", CONFIG["REQUEST_TIMEOUT"]),
+            )
             resp.raise_for_status()
         except requests.RequestException as e:
             logger.warning("LLM request failed once: %s. Retrying...", e)
             time.sleep(1.0)
-            resp = self.session.post(url, headers=headers, json=payload, timeout=CONFIG["REQUEST_TIMEOUT"])
+            resp = self.session.post(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=CONFIG.get("LLM_REQUEST_TIMEOUT", CONFIG["REQUEST_TIMEOUT"]),
+            )
             resp.raise_for_status()
 
         print("LLM HTTP status:", resp.status_code)

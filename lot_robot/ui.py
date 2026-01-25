@@ -312,14 +312,6 @@ class ProcurementApp:
         )
         self.analyze_btn.pack(side=tk.LEFT, padx=5)
 
-        self.lot_report_btn = ttk.Button(
-            doc_buttons_frame,
-            text="Подробный отчет по лоту",
-            command=self.analyze_lot_report,
-        )
-        self.lot_report_btn.pack(side=tk.LEFT, padx=5)
-
-
         self.export_docs_btn = ttk.Button(
             doc_buttons_frame,
             text="Экспорт анализа документов",
@@ -1070,13 +1062,12 @@ class ProcurementApp:
 
             self.root.after(
                 0,
-                lambda: self._show_lot_report_window(
+                lambda: self._fill_report_text(
                     lot_title=lot_title,
                     lot_url=lot_url,
                     lot_source=lot_source,
                     lot_price=lot_price,
                     lot_deadline=lot_deadline,
-                    documents=documents,
                     llm_data=llm_data,
                 ),
             )
