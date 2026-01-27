@@ -691,6 +691,69 @@ class ProcurementSearcher:
         logger.info(f"Total results from all sources: {len(all_results)}")
         return all_results
 
+    def _normalize_keywords(self, keywords):
+        norm = []
+        for kw in keywords or []:
+            if kw is None:
+                continue
+            if not isinstance(kw, str):
+                kw = str(kw)
+            kw = kw.strip().lower()
+            if kw:
+                norm.append(kw)
+        return norm
+
+    def filter_lots_by_content(
+        self,
+        lots,
+        include_keywords,
+        blacklist=None,
+        top_n=10,
+        progress_callback=None,
+    ):
+        include = self._normalize_keywords(include_keywords)
+        deny = self._normalize_keywords(blacklist)
+        if not include and not deny:
+            return lots
+        to_check = lots[:top_n] if top_n else lots
+        filtered = []
+        total = len(to_check)
+
+        for i, lot in enumerate(to_check, start=1):
+            if progress_callback:
+                progress_callback(f"Prefilter {i}/{total}: download + scan")
+
+            lot_title = (lot.get("Название") or "").strip()
+            lot_url = (lot.get("Ссылка") or "").strip()
+            combined_text = lot_title
+
+            documents = []
+            if lot_url:
+                try:
+                    documents = self.download_documents(lot_url, progress_callback)
+                except Exception as e:
+                    logger.warning("Prefilter download failed for %s: %s", lot_url, e)
+
+            if documents:
+                combined_text = "\n".join(
+                    [combined_text, self.build_lot_documents_text(documents)]
+                )
+
+            lower_text = combined_text.lower()
+            if deny and any(bad in lower_text for bad in deny):
+                continue
+
+            if not include:
+                filtered.append(lot)
+                continue
+
+            matches = [kw for kw in include if kw in lower_text]
+            if matches:
+                lot["_prefilter_matches"] = matches
+                filtered.append(lot)
+
+        return filtered
+
     def _get_stage_params(self, purchase_stage):
         """Get URL parameters for purchase stage filter."""
         stage_mapping = {

@@ -2,6 +2,7 @@ import os
 import sys
 import subprocess
 import tempfile
+import re
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, scrolledtext
 import threading
@@ -896,6 +897,17 @@ class ProcurementApp:
             results = self.searcher.search_procurements(
                 keyword, min_price, max_price, purchase_stage, law, update_progress, source_names
             )
+            if CONFIG.get("LOT_PREFILTER_ENABLED"):
+                include_keywords = CONFIG.get("LOT_PREFILTER_KEYWORDS") or []
+                blacklist = CONFIG.get("LOT_PREFILTER_BLACKLIST") or []
+                top_n = CONFIG.get("LOT_PREFILTER_TOP_N", 10)
+                results = self.searcher.filter_lots_by_content(
+                    results,
+                    include_keywords,
+                    blacklist=blacklist,
+                    top_n=top_n,
+                    progress_callback=update_progress,
+                )
             self.root.after(0, lambda: update_ui_finish(results))
         except Exception as e:
             logger.error(f"Search failed: {e}")

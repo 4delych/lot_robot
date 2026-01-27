@@ -43,6 +43,11 @@ CONFIG["LLM_API_URL"] = ""  # optional override for active provider
 CONFIG["LLM_MODEL"] = ""  # optional override for active provider
 CONFIG["LLM_REQUEST_TIMEOUT"] = 90
 
+# Lot prefilter (download first N lots and scan content for keywords/blacklist)
+CONFIG["LOT_PREFILTER_ENABLED"] = True
+CONFIG["LOT_PREFILTER_TOP_N"] = 10
+CONFIG["LOT_PREFILTER_KEYWORDS"] = []  # extra keywords in addition to search query
+CONFIG["LOT_PREFILTER_BLACKLIST"] = ["гемостаза"]
 # Search filter options
 PURCHASE_STAGES = {
     "": "Все этапы",
