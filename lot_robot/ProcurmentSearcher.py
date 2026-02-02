@@ -208,10 +208,9 @@ class ProcurementSearcher:
 
         return t
 
-    def call_llm_lot_analysis(self, combined_text: str) -> dict:
+    def call_llm_lot_analysis(self, combined_text: str) -> str:
         """
-        Запрос в LLM. Возвращает dict:
-        { "goals_tasks": "...", "timelines": "...", "requirements": "..." }
+        Запрос в LLM. Возвращает строку с JSON (для вывода в окне анализа).
         """
         provider = (CONFIG.get("LLM_PROVIDER") or "cloudru").strip().lower()
         providers = CONFIG.get("LLM_PROVIDERS") or {}
@@ -243,66 +242,94 @@ class ProcurementSearcher:
 
         # Если документов нет/текст пустой — сразу вернём прочерки, без вызова API
         if not combined_text:
-            return {
-                "subject": "—",
-                "work_scope": "—",
-                "work_and_submission_timelines": "Сроки работ: —; Сроки подачи: —",
-                "fit_summary": "—",
-            }
+            return json.dumps(
+                {"status": "not_found", "items": [], "message": "цены не нашлось"},
+                ensure_ascii=False,
+            )
 
-        system_prompt = ("Ты помощник по анализу закупок для компании ООО «Современные Технологии».\n"
-    "Контекст компании (важно для оценки соответствия):\n"
-    "ООО «Современные Технологии» специализируется на комплексном внедрении изменений и цифровых решений для "
-    "автоматизации и оптимизации бизнес-процессов предприятий различных отраслей. Компания реализует проекты по "
-    "цифровизации деятельности, управлению производственными активами, нормализации данных, управлению "
-    "организационными преобразованиями, а также оказывает услуги в сфере организационно-управленческого и "
-    "производственного консалтинга. Использует технологии ИИ, платформы для обработки нормативно-технической "
-    "документации, а также инструменты интеграции и поддержки процессов.\n\n"
+    #     system_prompt = ("Ты помощник по анализу закупок для компании ООО «Современные Технологии».\n"
+    # "Контекст компании (важно для оценки соответствия):\n"
+    # "ООО «Современные Технологии» специализируется на комплексном внедрении изменений и цифровых решений для "
+    # "автоматизации и оптимизации бизнес-процессов предприятий различных отраслей. Компания реализует проекты по "
+    # "цифровизации деятельности, управлению производственными активами, нормализации данных, управлению "
+    # "организационными преобразованиями, а также оказывает услуги в сфере организационно-управленческого и "
+    # "производственного консалтинга. Использует технологии ИИ, платформы для обработки нормативно-технической "
+    # "документации, а также инструменты интеграции и поддержки процессов.\n\n"
+    #
+    # "Тебе дан объединённый текст документов по одному лоту.\n"
+    # "Запрещено додумывать: используй только то, что явно есть в тексте.\n"
+    # "Если информации нет — ставь ровно символ '—'.\n\n"
+    #
+    # "Если по тексту видно, что это поставка товаров/материалов (признаки: 'поставка', 'товар', 'накладная', "
+    # "'ТТН', 'упаковка', 'маркировка', 'сертификат на продукцию', 'ГОСТ на продукцию') — верни строго:\n"
+    # "{\"subject\":\"—\",\"work_scope\":\"—\",\"work_and_submission_timelines\":\"—\",\"fit_summary\":\"Не наш профиль: поставка товаров/материалов.\"}\n\n"
+    #
+    # "Верни ТОЛЬКО валидный JSON (без markdown, без пояснений), строго с ключами:\n"
+    # "{\"subject\":\"...\",\"work_scope\":\"...\",\"work_and_submission_timelines\":\"...\",\"fit_summary\":\"...\"}\n\n"
+    #
+    # "Что нужно извлечь:\n"
+    # "1) subject — предмет закупки (1–2 предложения): что требуется сделать/оказать/разработать и какой ожидается результат.\n"
+    # "   Не включай цену/НМЦК.\n\n"
+    #
+    # "2) work_scope — состав работ/услуг:\n"
+    # "   Перечисли все пункты, которые сможешь найти через '; ' (без нумерации). Включай только то, что описывает работы/услуги/результаты. Они обычно прописываются в пункте Описание оказываемых услуг.\n"
+    # "   Примеры: обследование/интервью; описание AS-IS/TO-BE; моделирование процессов; разработка ТЗ/ЧТЗ, определение; характеристика; "
+    # "   нормализация/качество данных/НСИ; внедрение/доработка/интеграции; настройка; обучение; сопровождение; "
+    # "   подготовка отчетов/регламентов/методик.\n"
+    # "   Не включай сроки оплаты и финансовые условия.\n\n"
+    #
+    # "3) work_and_submission_timelines — сроки работ и сроки подачи документации к закупке:\n"
+    # "   ВАЖНО: это поле должно включать ДВА блока, в одной строке:\n"
+    # "   - 'Сроки работ: ...'\n"
+    # "   - 'Сроки подачи: ...'\n"
+    # "   \n"
+    # "   Сроки работ: включай только сроки выполнения работ/оказания услуг/этапов/сдачи результатов.\n"
+    # "   Сроки подачи: включай сроки/даты/время окончания подачи заявок, подачи документов, разъяснений, "
+    # "   если такие сроки явно есть в тексте.\n"
+    # "   \n"
+    # "   НЕ включай в сроки работ: оплату, акты/приемку, гарантию, устранение недостатков, штрафы/пени.\n"
+    # "   Если сроков работ нет — 'Сроки работ: —'. Если сроков подачи нет — 'Сроки подачи: —'.\n\n"
+    #
+    # "4) fit_summary — краткое резюме, насколько лот подходит под деятельность ООО «Современные Технологии»:\n"
+    # "   2–5 предложений. Обязательно:\n"
+    # "   - 1 предложение: почему подходит/не подходит (опираясь на предмет и состав работ).\n"
+    # "   - Укажи, какие компетенции компании релевантны (например: оптимизация БП, цифровизация, НСИ/нормализация данных, "
+    # "     управление изменениями, консалтинг, ИИ/обработка НТД, интеграции/сопровождение) — ТОЛЬКО если это связано с лотом.\n"
+    # "   - Если информации недостаточно — так и напиши и поставь прочерк для неизвестных деталей.\n\n"
+    #
+    # "Самопроверка перед ответом:\n"
+    # "- Если в 'Сроки работ' попали слова 'оплата', 'акт', 'приемка', 'гарантия', 'устранение недостатков' — убери их.\n"
+    # "- Не выдумывай даты/сроки/объемы.\n"
+    #     )
 
-    "Тебе дан объединённый текст документов по одному лоту.\n"
-    "Запрещено додумывать: используй только то, что явно есть в тексте.\n"
-    "Если информации нет — ставь ровно символ '—'.\n\n"
-
-    "Если по тексту видно, что это поставка товаров/материалов (признаки: 'поставка', 'товар', 'накладная', "
-    "'ТТН', 'упаковка', 'маркировка', 'сертификат на продукцию', 'ГОСТ на продукцию') — верни строго:\n"
-    "{\"subject\":\"—\",\"work_scope\":\"—\",\"work_and_submission_timelines\":\"—\",\"fit_summary\":\"Не наш профиль: поставка товаров/материалов.\"}\n\n"
-
-    "Верни ТОЛЬКО валидный JSON (без markdown, без пояснений), строго с ключами:\n"
-    "{\"subject\":\"...\",\"work_scope\":\"...\",\"work_and_submission_timelines\":\"...\",\"fit_summary\":\"...\"}\n\n"
-
-    "Что нужно извлечь:\n"
-    "1) subject — предмет закупки (1–2 предложения): что требуется сделать/оказать/разработать и какой ожидается результат.\n"
-    "   Не включай цену/НМЦК.\n\n"
-
-    "2) work_scope — состав работ/услуг:\n"
-    "   Перечисли все пункты, которые сможешь найти через '; ' (без нумерации). Включай только то, что описывает работы/услуги/результаты. Они обычно прописываются в пункте Описание оказываемых услуг.\n"
-    "   Примеры: обследование/интервью; описание AS-IS/TO-BE; моделирование процессов; разработка ТЗ/ЧТЗ, определение; характеристика; "
-    "   нормализация/качество данных/НСИ; внедрение/доработка/интеграции; настройка; обучение; сопровождение; "
-    "   подготовка отчетов/регламентов/методик.\n"
-    "   Не включай сроки оплаты и финансовые условия.\n\n"
-
-    "3) work_and_submission_timelines — сроки работ и сроки подачи документации к закупке:\n"
-    "   ВАЖНО: это поле должно включать ДВА блока, в одной строке:\n"
-    "   - 'Сроки работ: ...'\n"
-    "   - 'Сроки подачи: ...'\n"
-    "   \n"
-    "   Сроки работ: включай только сроки выполнения работ/оказания услуг/этапов/сдачи результатов.\n"
-    "   Сроки подачи: включай сроки/даты/время окончания подачи заявок, подачи документов, разъяснений, "
-    "   если такие сроки явно есть в тексте.\n"
-    "   \n"
-    "   НЕ включай в сроки работ: оплату, акты/приемку, гарантию, устранение недостатков, штрафы/пени.\n"
-    "   Если сроков работ нет — 'Сроки работ: —'. Если сроков подачи нет — 'Сроки подачи: —'.\n\n"
-
-    "4) fit_summary — краткое резюме, насколько лот подходит под деятельность ООО «Современные Технологии»:\n"
-    "   2–5 предложений. Обязательно:\n"
-    "   - 1 предложение: почему подходит/не подходит (опираясь на предмет и состав работ).\n"
-    "   - Укажи, какие компетенции компании релевантны (например: оптимизация БП, цифровизация, НСИ/нормализация данных, "
-    "     управление изменениями, консалтинг, ИИ/обработка НТД, интеграции/сопровождение) — ТОЛЬКО если это связано с лотом.\n"
-    "   - Если информации недостаточно — так и напиши и поставь прочерк для неизвестных деталей.\n\n"
-
-    "Самопроверка перед ответом:\n"
-    "- Если в 'Сроки работ' попали слова 'оплата', 'акт', 'приемка', 'гарантия', 'устранение недостатков' — убери их.\n"
-    "- Не выдумывай даты/сроки/объемы.\n"
+        system_prompt = (
+            "Проанализируй текст документов лота и найди в нем цены на разные виды кирпича, если такие имеются.\n"
+            "Верни ТОЛЬКО валидный JSON без markdown и без пояснений.\n"
+            "Формат ответа:\n"
+            "{\n"
+            '  "status": "found" | "not_found",\n'
+            '  "items": [\n'
+            '    {\n'
+            '      "brick": "...",\n'
+            '      "price": "...",\n'
+            '      "currency": "...",\n'
+            '      "unit": "...",\n'
+            '      "context": "...",\n'
+            '      "supplier": "...",\n'
+            '      "suppliers": [\n'
+            '        {"name": "...", "price": "...", "currency": "...", "unit": "...", "context": "..."}\n'
+            "      ]\n"
+            "    }\n"
+            "  ],\n"
+            '  "message": "..." \n'
+            "}\n"
+            "Если цены не найдено, верни строго:\n"
+            '{"status":"not_found","items":[],"message":"цены не нашлось"}\n'
+            "Если цены найдены, status = \"found\", items содержит упоминания кирпича и цену.\n"
+            "Если в документе есть цены на один кирпич от разных поставщиков — заполни suppliers списком.(обычно пишут Поставщик 1, Поставщик2 и так далее\n"
+            "Если поставщик один — можно использовать supplier + price (suppliers можно не указывать).\n"
+            "Если поставщик не указан — оставь supplier пустым, а цену укажи в price.\n"
+            "Ничего кроме JSON."
         )
 
         safe_text = self._sanitize_for_llm(combined_text, max_chars=25_000)
@@ -316,12 +343,10 @@ class ProcurementSearcher:
         print("\n===== LLM INPUT TEXT END =====\n")
 
         if not safe_text:
-            return {
-                "subject": "—",
-                "work_scope": "—",
-                "work_and_submission_timelines": "Сроки работ: —; Сроки подачи: —",
-                "fit_summary": "—",
-            }
+            return json.dumps(
+                {"status": "not_found", "items": [], "message": "цены не нашлось"},
+                ensure_ascii=False,
+            )
 
         payload = {
             "model": model,
@@ -330,7 +355,7 @@ class ProcurementSearcher:
                 {"role": "user", "content": safe_text},
             ],
             "temperature": 0.2,
-            "max_tokens": 4000,
+            "max_tokens": 6000,
         }
 
         headers = {
@@ -373,12 +398,10 @@ class ProcurementSearcher:
             print("Raw resp.text(first 2000):", (resp.text or "")[:2000])
             print("===================================\n")
             logger.warning("LLM response is not JSON: %s; text=%s", err, (resp.text or "")[:2000])
-            return {
-                "subject": "—",
-                "work_scope": "—",
-                "work_and_submission_timelines": "Сроки работ: —; Сроки подачи: —",
-                "fit_summary": "—",
-            }
+            return json.dumps(
+                {"status": "not_found", "items": [], "message": "цены не нашлось"},
+                ensure_ascii=False,
+            )
 
         # 2) Достаём content максимально аккуратно
         content = ""
@@ -391,9 +414,9 @@ class ProcurementSearcher:
         logger.info("LLM raw response len=%s", len(content))
 
         # 3) Извлекаем JSON-объект из ответа (даже если вокруг текст/```json)
-        def _extract_json_object(text: str) -> dict:
+        def _extract_json_text(text: str) -> str:
             if not text:
-                return {}
+                return ""
 
             cleaned = text.strip()
             cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
@@ -402,44 +425,34 @@ class ProcurementSearcher:
             l = cleaned.find("{")
             r = cleaned.rfind("}")
             if l == -1 or r == -1 or r <= l:
-                return {}
+                return ""
 
             candidate = cleaned[l:r + 1].strip()
             if not candidate:
-                return {}
+                return ""
 
             try:
-                return json.loads(candidate)
+                json.loads(candidate)
+                return candidate
             except Exception as parse_err:
                 print("===== LLM JSON PARSE ERROR =====")
                 print(str(parse_err))
                 print("Candidate(first 2000):", candidate[:2000])
                 print("================================")
                 logger.warning("LLM JSON parse error: %s; candidate=%s", parse_err, candidate[:2000])
-                return {}
+                return ""
 
-        data = _extract_json_object(content)
+        json_text = _extract_json_text(content)
+        if not json_text:
+            json_text = json.dumps(
+                {"status": "not_found", "items": [], "message": "цены не нашлось"},
+                ensure_ascii=False,
+            )
 
-        print("\n===== LLM PARSED JSON =====\n", json.dumps(data, ensure_ascii=False, indent=2),
-              "\n===========================\n")
-        logger.info("LLM parsed json: %s", json.dumps(data, ensure_ascii=False))
+        print("\n===== LLM JSON TEXT =====\n", json_text, "\n========================\n")
+        logger.info("LLM json text len=%s", len(json_text))
 
-        def _norm(v: str) -> str:
-            v = (v or "").strip()
-            return v if v else "—"
-
-        result = {
-            "subject": _norm(data.get("subject")),
-            "work_scope": _norm(data.get("work_scope")),
-            "work_and_submission_timelines": _norm(data.get("work_and_submission_timelines")),
-            "fit_summary": _norm(data.get("fit_summary")),
-        }
-
-        # страховка: если модель вернула просто '—'
-        if result["work_and_submission_timelines"] == "—":
-            result["work_and_submission_timelines"] = "Сроки работ: —; Сроки подачи: —"
-
-        return result
+        return json_text
 
     def _is_tektorg_allowed_doc_url(self, url: str) -> bool:
         try:
@@ -1855,34 +1868,90 @@ class ProcurementSearcher:
             return ""
 
         try:
-            wb = load_workbook(BytesIO(content), data_only=True, read_only=True)
+            wb = load_workbook(BytesIO(content), data_only=True, read_only=False)
             parts = []
             total_cells = 0
 
             for ws in wb.worksheets:
                 sheet_name = ws.title
                 logger.debug(f"Обработка листа Excel: {sheet_name}")
-                
-                for row in ws.iter_rows():
-                    row_vals = []
-                    for cell in row:
-                        v = cell.value
-                        if v is None:
+
+                max_row = ws.max_row or 0
+                max_col = ws.max_column or 0
+                if max_row == 0 or max_col == 0:
+                    continue
+
+                # Карта merged-ячеек -> значение верхней левой
+                merged_map = {}
+                try:
+                    for r in ws.merged_cells.ranges:
+                        min_row, min_col, max_row_m, max_col_m = r.min_row, r.min_col, r.max_row, r.max_col
+                        top_left = ws.cell(min_row, min_col).value
+                        if top_left is None:
                             continue
-                        # Преобразуем значение в строку, обрабатывая даты и числа
-                        if isinstance(v, (int, float)):
-                            row_vals.append(str(v))
-                        elif isinstance(v, str):
-                            row_vals.append(v.strip())
-                        else:
-                            row_vals.append(str(v))
+                        for rr in range(min_row, max_row_m + 1):
+                            for cc in range(min_col, max_col_m + 1):
+                                merged_map[(rr, cc)] = top_left
+                except Exception:
+                    pass
+
+                def _cell_value(rr, cc):
+                    v = ws.cell(rr, cc).value
+                    if v is None:
+                        v = merged_map.get((rr, cc))
+                    if isinstance(v, str):
+                        v = v.strip()
+                    return v
+
+                def _is_header_value(v):
+                    if v is None:
+                        return False
+                    s = str(v).strip()
+                    if not s:
+                        return False
+                    # заголовки обычно не числовые
+                    return re.fullmatch(r"[-+]?\d+(?:[.,]\d+)?", s) is None
+
+                header_scan_rows = min(8, max_row)
+                col_headers = []
+                for cc in range(1, max_col + 1):
+                    parts_header = []
+                    seen = set()
+                    for rr in range(1, header_scan_rows + 1):
+                        v = _cell_value(rr, cc)
+                        if not _is_header_value(v):
+                            continue
+                        s = str(v).strip()
+                        key = s.lower()
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        parts_header.append(s)
+                    col_headers.append(" / ".join(parts_header))
+
+                for rr in range(header_scan_rows + 1, max_row + 1):
+                    row_items = []
+                    non_empty = 0
+                    for cc in range(1, max_col + 1):
+                        v = _cell_value(rr, cc)
+                        if v is None or (isinstance(v, str) and not v):
+                            continue
+                        non_empty += 1
                         total_cells += 1
-                    
-                    if row_vals:
-                        parts.append(" ".join(row_vals))
+                        header = col_headers[cc - 1]
+                        val = str(v)
+                        if header:
+                            row_items.append(f"{header}={val}")
+                        else:
+                            row_items.append(f"C{cc}={val}")
+
+                    if non_empty >= 2 and row_items:
+                        parts.append(" ; ".join(row_items))
 
             result = "\n".join(parts)
-            logger.debug(f"Извлечено {len(parts)} строк из {len(wb.worksheets)} листов Excel, всего ячеек: {total_cells}")
+            logger.debug(
+                f"Извлечено {len(parts)} строк из {len(wb.worksheets)} листов Excel, всего ячеек: {total_cells}"
+            )
             return result
         except Exception as e:
             logger.warning(f"Не удалось извлечь текст из XLSX: {e}")
