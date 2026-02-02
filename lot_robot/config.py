@@ -47,7 +47,7 @@ CONFIG["LLM_REQUEST_TIMEOUT"] = 90
 CONFIG["LOT_PREFILTER_ENABLED"] = True
 CONFIG["LOT_PREFILTER_TOP_N"] = 10
 CONFIG["LOT_PREFILTER_KEYWORDS"] = []  # extra keywords in addition to search query
-CONFIG["LOT_PREFILTER_BLACKLIST"] = []
+CONFIG["LOT_PREFILTER_BLACKLIST"] = ["гемостаза"]
 # Search filter options
 PURCHASE_STAGES = {
     "": "Все этапы",

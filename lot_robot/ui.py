@@ -3,7 +3,6 @@ import sys
 import subprocess
 import tempfile
 import re
-import json
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, scrolledtext
 import threading
@@ -635,78 +634,6 @@ class ProcurementApp:
 
         return "Неопределенно", "uncertain"
 
-    def _format_brick_prices_report(self, llm_text: str) -> str:
-        """Форматирует JSON-ответ модели в читабельный отчет."""
-        text = (llm_text or "").strip()
-        if not text:
-            text = '{"status":"not_found","items":[],"message":"цены не нашлось"}'
-
-        try:
-            data = json.loads(text)
-        except Exception:
-            return f"Сырой ответ модели:\n{text}"
-
-        status = (data.get("status") or "").strip().lower()
-        message = (data.get("message") or "").strip()
-        items = data.get("items") if isinstance(data.get("items"), list) else []
-
-        lines = [
-            "АНАЛИЗ ЦЕН НА КИРПИЧ",
-            "=" * 40,
-        ]
-        if message:
-            lines.append(f"Сообщение: {message}")
-
-        if status == "not_found" or not items:
-            if not message:
-                lines.append("Цены не нашлись.")
-            return "\n".join(lines)
-
-        lines.append(f"Найдено позиций: {len(items)}")
-        lines.append("")
-
-        for idx, item in enumerate(items, 1):
-            brick = (item.get("brick") or "—").strip()
-            price = (item.get("price") or "—").strip()
-            currency = (item.get("currency") or "").strip()
-            unit = (item.get("unit") or "").strip()
-            context = (item.get("context") or "").strip()
-            supplier = (item.get("supplier") or "").strip()
-            suppliers = item.get("suppliers") if isinstance(item.get("suppliers"), list) else []
-
-            lines.append(f"{idx}. {brick}")
-
-            if suppliers:
-                lines.append("   Цены от поставщиков:")
-                for s in suppliers:
-                    s_name = (s.get("name") or "—").strip()
-                    s_price = (s.get("price") or "—").strip()
-                    s_currency = (s.get("currency") or "").strip()
-                    s_unit = (s.get("unit") or "").strip()
-                    s_context = (s.get("context") or "").strip()
-
-                    s_line = f"   - {s_name}: {s_price}"
-                    if s_currency:
-                        s_line += f" {s_currency}"
-                    if s_unit:
-                        s_line += f" / {s_unit}"
-                    if s_context:
-                        s_line += f" ({s_context})"
-                    lines.append(s_line)
-            else:
-                price_line = f"   Цена: {price}"
-                if currency:
-                    price_line += f" {currency}"
-                if unit:
-                    price_line += f" / {unit}"
-                if context:
-                    price_line += f" ({context})"
-                if supplier:
-                    price_line += f" — поставщик: {supplier}"
-                lines.append(price_line)
-
-        return "\n".join(lines)
-
     def _fill_report_text(
         self,
         lot_title: str,
@@ -714,38 +641,62 @@ class ProcurementApp:
         lot_source: str,
         lot_price: str,
         lot_deadline: str,
-        llm_data: str,
+        llm_data: dict,
     ) -> None:
-        """Формирует текст отчета в правой панели (сырой JSON от модели)."""
-        analysis_text = (llm_data or "").strip()
-        if not analysis_text:
-            analysis_text = '{"status":"not_found","items":[],"message":"цены не нашлось"}'
+        """Формирует структурированный текст отчета в правой панели."""
+        subject = llm_data.get("subject", "—")
+        work_scope = llm_data.get("work_scope", "—")
+        timelines = llm_data.get(
+            "work_and_submission_timelines",
+            "Сроки работ: —; Сроки подачи: —",
+        )
+        fit_summary = llm_data.get("fit_summary", "—")
 
         self.report_text.config(state=tk.NORMAL)
         self.report_text.delete("1.0", tk.END)
 
-        # Временный режим: показываем сырой JSON от модели
-        verdict_label = "Ответ модели (JSON)"
-        verdict_explanation = ""
-        try:
-            data = json.loads(analysis_text)
-            status = (data.get("status") or "").strip().lower()
-            message = (data.get("message") or "").strip()
-            if status == "found":
-                verdict_label = "Цены найдены"
-            elif status == "not_found":
-                verdict_label = "Цены не найдены"
-            if message:
-                verdict_explanation = message
-        except Exception:
-            verdict_label = "Ответ модели (сырой текст)"
-            verdict_explanation = ""
+        # Финальный вердикт
+        verdict_label, verdict_type = self._derive_verdict_from_summary(fit_summary)
+        self.verdict_label_var.set(f"Итоговый вердикт: {verdict_label}")
+        self.verdict_explanation_var.set(fit_summary or "—")
+        self._set_verdict_style(verdict_type)
 
-        self.verdict_label_var.set(verdict_label)
-        self.verdict_explanation_var.set(verdict_explanation)
-        self._set_verdict_style("idle")
+        # Структурированный отчет
+        self.report_text.insert(tk.END, "ОТЧЕТ ПО ЛОТУ\n")
+        self.report_text.insert(tk.END, "=" * 60 + "\n\n")
 
-        self.report_text.insert(tk.END, self._format_brick_prices_report(analysis_text))
+        self.report_text.insert(tk.END, "1) ЦЕЛЬ РАБОТ\n")
+        self.report_text.insert(tk.END, "-" * 40 + "\n")
+        self.report_text.insert(tk.END, f"{subject or '—'}\n\n")
+
+        self.report_text.insert(tk.END, "2) ЗАДАЧИ / СОСТАВ РАБОТ\n")
+        self.report_text.insert(tk.END, "-" * 40 + "\n")
+        if work_scope and work_scope != "—":
+            # разбиваем по ';' для удобства чтения
+            parts = [p.strip() for p in work_scope.split(";") if p.strip()]
+            for p in parts:
+                self.report_text.insert(tk.END, f" • {p}\n")
+            self.report_text.insert(tk.END, "\n")
+        else:
+            self.report_text.insert(tk.END, "—\n\n")
+
+        self.report_text.insert(tk.END, "3) ОБЪЕМ И СРОКИ РАБОТ / ПОДАЧИ\n")
+        self.report_text.insert(tk.END, "-" * 40 + "\n")
+        self.report_text.insert(tk.END, f"{timelines}\n\n")
+
+        self.report_text.insert(tk.END, "4) СРОКИ ЗАКУПКИ\n")
+        self.report_text.insert(tk.END, "-" * 40 + "\n")
+        self.report_text.insert(
+            tk.END,
+            f"Окончание подачи заявок (с сайта): {lot_deadline or '—'}\n\n",
+        )
+
+        self.report_text.insert(tk.END, "5) ОБЩИЕ СВЕДЕНИЯ О ЛОТЕ\n")
+        self.report_text.insert(tk.END, "-" * 40 + "\n")
+        self.report_text.insert(tk.END, f"Наименование: {lot_title}\n")
+        self.report_text.insert(tk.END, f"Ссылка: {lot_url}\n")
+        self.report_text.insert(tk.END, f"Площадка: {lot_source}\n")
+        self.report_text.insert(tk.END, f"Стоимость: {lot_price}\n\n")
 
         self.report_text.config(state=tk.DISABLED)
 
@@ -1113,8 +1064,13 @@ class ProcurementApp:
             try:
                 llm_data = self.searcher.call_llm_lot_analysis(combined_text)
             except Exception as err:
-                logger.warning("LLM analysis failed, fallback to not_found JSON: %s", err)
-                llm_data = '{"status":"not_found","items":[],"message":"цены не нашлось"}'
+                logger.warning("LLM analysis failed, fallback to dashes: %s", err)
+                llm_data = {
+                    "subject": "—",
+                    "work_scope": "—",
+                    "work_and_submission_timelines": "Сроки работ: —; Сроки подачи: —",
+                    "fit_summary": "—",
+                }
 
             self.root.after(
                 0,
@@ -1143,7 +1099,7 @@ class ProcurementApp:
 
     def _show_lot_report_window(self, lot_title: str, lot_url: str, lot_source: str,
                                 lot_price: str, lot_deadline: str,
-                                documents: list[dict], llm_data: str):
+                                documents: list[dict], llm_data: dict):
         win = tk.Toplevel(self.root)
         win.title("Отчет по лоту")
         win.geometry("900x650")
@@ -1169,8 +1125,11 @@ class ProcurementApp:
         text_widget.insert(tk.END, "2) АНАЛИТИКА ДОКУМЕНТОВ\n", "subtitle")
         text_widget.insert(tk.END, f"Всего документов: {len(documents)}\n\n")
 
-        text_widget.insert(tk.END, self._format_brick_prices_report(llm_data))
-        text_widget.insert(tk.END, "\n\n")
+        text_widget.insert(tk.END, f"Предмет закупки: {llm_data.get('subject', '—')}\n\n")
+        text_widget.insert(tk.END, f"Состав работ/услуг: {llm_data.get('work_scope', '—')}\n\n")
+        text_widget.insert(tk.END,
+                           f"Сроки работ и подачи: {llm_data.get('work_and_submission_timelines', 'Сроки работ: —; Сроки подачи: —')}\n\n")
+        text_widget.insert(tk.END, f"Итоговое резюме (насколько подходит): {llm_data.get('fit_summary', '—')}\n\n")
 
         # список документов
         text_widget.insert(tk.END, "СПИСОК ДОКУМЕНТОВ\n", "subtitle")
