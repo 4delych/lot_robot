@@ -9,7 +9,7 @@ CONFIG = {
     "USER_AGENT": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 }
 
-CONFIG["LLM_PROVIDER"] = "vsellm_yandex"
+CONFIG["LLM_PROVIDER"] = "cloudru"
 CONFIG["LLM_PROVIDER_KEYS"] = {
     "cloudru": "OWMyYjA4ZjItNGY2Ni00OTNjLWJlMmUtN2Y5YTI1MjYwYWNi.9b5fe2f4b7aa0c1358219ee59f9b2b25",
     "vsellm_yandex": "sk-FazTRmiqKGjpZwRob5lvRw",
@@ -42,12 +42,14 @@ CONFIG["LLM_API_KEY"] = ""  # optional override for active provider
 CONFIG["LLM_API_URL"] = ""  # optional override for active provider
 CONFIG["LLM_MODEL"] = ""  # optional override for active provider
 CONFIG["LLM_REQUEST_TIMEOUT"] = 90
+CONFIG["LLM_BATCH_SIZE"] = 20
+CONFIG["SEARCH_KEYWORDS"] = ["консалтинг", "справочная"]
 
 # Lot prefilter (download first N lots and scan content for keywords/blacklist)
 CONFIG["LOT_PREFILTER_ENABLED"] = True
 CONFIG["LOT_PREFILTER_TOP_N"] = 10
 CONFIG["LOT_PREFILTER_KEYWORDS"] = []  # extra keywords in addition to search query
-CONFIG["LOT_PREFILTER_BLACKLIST"] = ["гемостаза"]
+CONFIG["LOT_PREFILTER_BLACKLIST"] = []
 # Search filter options
 PURCHASE_STAGES = {
     "": "Все этапы",

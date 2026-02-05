@@ -22,8 +22,8 @@ class ProcurementSource(ABC):
         pass
 
     @abstractmethod
-    def build_search_url(self, keyword, min_price=None, max_price=None, 
-                        purchase_stage=None, law=None) -> tuple[str, dict]:
+    def build_search_url(self, keyword, min_price=None, max_price=None,
+                        purchase_stage=None, law=None, page_number: int = 1) -> tuple[str, dict]:
         """
         Строит URL и параметры для поиска.
         Возвращает (url, params_dict).
@@ -71,12 +71,12 @@ class ZakupkiGovSource(ProcurementSource):
     def get_name(self) -> str:
         return "zakupki.gov.ru"
 
-    def build_search_url(self, keyword, min_price=None, max_price=None,
-                        purchase_stage=None, law=None) -> tuple[str, dict]:
+    def build_search_url(self, keyword, min_price=None, max_price=None, 
+                        purchase_stage=None, law=None, page_number: int = 1) -> tuple[str, dict]:
         url = f"{self.base_url}/epz/order/extendedsearch/results.html"
         params = {
             "searchString": keyword.strip(),
-            "pageNumber": "1",
+            "pageNumber": str(max(1, int(page_number))),
             "recordsPerPage": "_20",
         }
 
@@ -283,13 +283,15 @@ class TektorgSource(ProcurementSource):
         return "tektorg.ru"
 
     def build_search_url(self, keyword, min_price=None, max_price=None,
-                        purchase_stage=None, law=None) -> tuple[str, dict]:
+                        purchase_stage=None, law=None, page_number: int = 1) -> tuple[str, dict]:
         """
         Формирует URL для поиска на tektorg.ru.
         Возвращает (url, params), где params будет использован requests для формирования query string.
         """
         url = f"{self.base_url}/procedures"
         params = {}
+        if page_number and page_number > 1:
+            params["page"] = str(int(page_number))
 
         # Ключевое слово
         if keyword and keyword.strip():
@@ -652,7 +654,7 @@ class BidzaarSource(ProcurementSource):
         return "bidzaar.com"
 
     def build_search_url(self, keyword, min_price=None, max_price=None,
-                         purchase_stage=None, law=None) -> tuple[str, dict]:
+                         purchase_stage=None, law=None, page_number: int = 1) -> tuple[str, dict]:
         """
         Bidzaar:
         - выдача: /requests/public/buy
@@ -672,6 +674,8 @@ class BidzaarSource(ProcurementSource):
         kw = (keyword or "").strip()
         if kw:
             params["search"] = kw  # input name="search" :contentReference[oaicite:3]{index=3}
+        if page_number and page_number > 1:
+            params["page"] = str(int(page_number))
 
         stage_to_status = {
             "SUBMISSION": 1,   # Подача заявок

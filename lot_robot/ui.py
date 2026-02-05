@@ -9,6 +9,7 @@ import threading
 import pandas as pd
 import logging
 import webbrowser
+import json
 
 
 from config import PURCHASE_STAGES, LAWS, CONFIG
@@ -30,6 +31,20 @@ class ProcurementApp:
         self.search_thread = None
         self.analysis_results = []
         self._temp_doc_files = []
+        self._lot_llm_cache = {}
+        self._lot_llm_cache_path = None
+        self._lot_titles_dump_path = None
+        self._lot_titles_sent_path = None
+        try:
+            tmp = tempfile.NamedTemporaryFile(
+                prefix="lot_title_cache_", suffix=".json", delete=False
+            )
+            self._lot_llm_cache_path = tmp.name
+            tmp.close()
+            self._lot_titles_dump_path = os.path.join(os.getcwd(), "lot_titles_all.txt")
+            self._lot_titles_sent_path = os.path.join(os.getcwd(), "lot_titles_sent.txt")
+        except Exception as e:
+            logger.warning("Failed to create temp cache file: %s", e)
         # состояние правой панели анализа
         self.current_lot = None
         self.analysis_state_var = tk.StringVar(value="Idle")
@@ -43,6 +58,7 @@ class ProcurementApp:
             CONFIG["LLM_PROVIDER"] = default_provider
         self.llm_provider_var = tk.StringVar(value=default_provider)
         self._setup_ui()
+        self._load_lot_llm_cache()
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
 
@@ -143,6 +159,7 @@ class ProcurementApp:
 
         # Левая панель (поиск/фильтры/результаты)
         left_frame = ttk.Frame(paned, padding=(8, 0, 8, 0))
+        self.left_frame = left_frame
         left_frame.columnconfigure(1, weight=1)
         left_frame.rowconfigure(7, weight=0)  # блок документов
         left_frame.rowconfigure(8, weight=1)  # таблица результатов
@@ -155,17 +172,9 @@ class ProcurementApp:
         paned.add(left_frame, weight=3)
         paned.add(right_frame, weight=2)
 
-        # Input fields
-        ttk.Label(left_frame, text="Ключевое слово:").grid(
-            row=0, column=0, sticky="w", pady=2
-        )
-        self.keyword_entry = ttk.Entry(left_frame, width=50)
-        self.keyword_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), pady=2)
-        self.keyword_entry.bind("<Return>", lambda e: self.search())
-
         # Filters header (collapsible controls)
         filters_header = ttk.Frame(left_frame)
-        filters_header.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(4, 0))
+        filters_header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(4, 0))
         filters_header.columnconfigure(0, weight=1)
 
         ttk.Label(
@@ -186,7 +195,7 @@ class ProcurementApp:
         price_frame = ttk.LabelFrame(
             left_frame, text="Фильтр по цене (руб)", padding="5"
         )
-        price_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        price_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         price_frame.columnconfigure(1, weight=1)
         price_frame.columnconfigure(3, weight=1)
 
@@ -206,7 +215,7 @@ class ProcurementApp:
         filters_frame = ttk.LabelFrame(
             left_frame, text="Дополнительные фильтры", padding="5"
         )
-        filters_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        filters_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         filters_frame.columnconfigure(1, weight=1)
         filters_frame.columnconfigure(3, weight=1)
 
@@ -238,11 +247,12 @@ class ProcurementApp:
         )
         self.law_combo.grid(row=0, column=3, sticky="w")
 
+
         # Sources selection frame
         sources_frame = ttk.LabelFrame(
             left_frame, text="Источники поиска", padding="5"
         )
-        sources_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        sources_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
 
         self.source_vars = {}
         available_sources = ["zakupki.gov.ru", "tektorg.ru", "bidzaar.com"]
@@ -255,6 +265,39 @@ class ProcurementApp:
                 variable=var
             )
             cb.grid(row=0, column=i, sticky="w", padx=10)
+
+        # Keywords selection frame
+        keywords_frame = ttk.LabelFrame(
+            left_frame, text="Ключевые слова", padding="5"
+        )
+        keywords_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        keywords_frame.columnconfigure(0, weight=1)
+
+        self.search_keyword_vars = {}
+        self.search_keyword_list = [k.strip() for k in (CONFIG.get("SEARCH_KEYWORDS") or []) if isinstance(k, str) and k.strip()]
+
+        if not self.search_keyword_list:
+            ttk.Label(
+                keywords_frame,
+                text="Список ключевых слов пуст. Заполните SEARCH_KEYWORDS в config.py",
+                foreground="#B91C1C",
+                wraplength=420,
+            ).grid(row=0, column=0, sticky="w", pady=2)
+        else:
+            for i, kw in enumerate(self.search_keyword_list):
+                var = tk.BooleanVar(value=True)
+                self.search_keyword_vars[kw] = var
+                cb = ttk.Checkbutton(keywords_frame, text=kw, variable=var)
+                cb.grid(row=i, column=0, sticky="w")
+
+        self.select_all_btn = ttk.Button(
+            keywords_frame, text="Снять все", command=self._toggle_select_all_keywords
+        )
+        if not self.search_keyword_list:
+            self.select_all_btn.config(state="disabled", text="Выбрать все")
+        self.select_all_btn.grid(row=0, column=1, sticky="e", padx=(10, 0))
+
+        self._filter_blocks = [price_frame, filters_frame, sources_frame, keywords_frame]
 
         # Buttons frame
         buttons_frame = ttk.Frame(left_frame)
@@ -277,6 +320,11 @@ class ProcurementApp:
             buttons_frame, text="Очистить", command=self.clear_results
         )
         self.clear_btn.pack(side=tk.LEFT, padx=5)
+
+        self.reset_cache_btn = ttk.Button(
+            buttons_frame, text="Сброс кэша", command=self._reset_llm_cache
+        )
+        self.reset_cache_btn.pack(side=tk.LEFT, padx=5)
 
         # Progress bar
         self.progress_var = tk.StringVar(value="Готов к поиску")
@@ -336,24 +384,28 @@ class ProcurementApp:
         table_frame.columnconfigure(0, weight=1)
         table_frame.rowconfigure(0, weight=1)
 
-        columns = ("Название", "Цена", "Источник", "Ссылка")
+        columns = ("Название", "Цена", "Оценка", "Источник", "Ссылка")
+        self.tree_default_height = 15
+        self.tree_expanded_height = 25
         self.tree = ttk.Treeview(
             table_frame,
             columns=columns,
             show="headings",
-            height=15,
+            height=self.tree_default_height,
             style="App.Treeview",
         )
 
         self.tree.heading("Название", text="Название", anchor="w")
         self.tree.heading("Цена", text="Цена (руб)", anchor="e")
+        self.tree.heading("Оценка", text="Оценка", anchor="center", command=self._toggle_score_filter_popup)
         self.tree.heading("Источник", text="Источник", anchor="w")
         self.tree.heading("Ссылка", text="Ссылка", anchor="w")
 
-        self.tree.column("Название", width=350, anchor="w")
+        self.tree.column("Название", width=330, anchor="w")
         self.tree.column("Цена", width=120, anchor="e")
+        self.tree.column("Оценка", width=80, anchor="center")
         self.tree.column("Источник", width=120, anchor="w")
-        self.tree.column("Ссылка", width=300, anchor="w")
+        self.tree.column("Ссылка", width=280, anchor="w")
 
         v_scrollbar = ttk.Scrollbar(
             table_frame, orient="vertical", command=self.tree.yview
@@ -372,6 +424,9 @@ class ProcurementApp:
         self.tree.bind("<Double-1>", self._on_item_double_click)
         self.tree.bind("<<TreeviewSelect>>", self._on_result_select)
 
+        self._score_filter_set = None
+        self._score_filter_popup = None
+
     def _toggle_filters(self):
         """Сворачивает/разворачивает блоки фильтров, не меняя их состояния."""
         new_state = not self.filters_collapsed.get()
@@ -380,20 +435,101 @@ class ProcurementApp:
         # Все блоки фильтров находятся в строках 2–4 левой панели:
         # price_frame, filters_frame, sources_frame.
         # Ищем их по grid_info и скрываем/показываем.
-        parent = self.keyword_entry.master  # left_frame
-        children = parent.winfo_children()
-        for child in children:
-            info = child.grid_info()
-            if not info:
-                continue
-            row = int(info.get("row", -1))
-            if row in (2, 3, 4):
-                if new_state:
-                    child.grid_remove()
-                else:
-                    child.grid()
+        blocks = getattr(self, "_filter_blocks", [])
+        for child in blocks:
+            if new_state:
+                child.grid_remove()
+            else:
+                child.grid()
 
         self.filters_toggle_btn.config(text="Развернуть" if new_state else "Свернуть")
+        if getattr(self, "tree", None):
+            target_height = self.tree_expanded_height if new_state else self.tree_default_height
+            self.tree.configure(height=target_height)
+
+    def _toggle_score_filter_popup(self):
+        if self._score_filter_popup and self._score_filter_popup.winfo_exists():
+            self._score_filter_popup.destroy()
+            self._score_filter_popup = None
+            return
+
+        popup = tk.Toplevel(self.root)
+        popup.title("Фильтр оценки")
+        popup.resizable(False, False)
+        popup.transient(self.root)
+        popup.grab_set()
+
+        self._score_filter_popup = popup
+
+        current = self._score_filter_set or set([1, 2, 3, 4, 5])
+        vars_map = {}
+        for i, score in enumerate([5, 4, 3, 2, 1]):
+            var = tk.BooleanVar(value=score in current)
+            vars_map[score] = var
+            ttk.Checkbutton(popup, text=f"{score} ★", variable=var).grid(
+                row=i, column=0, sticky="w", padx=10, pady=2
+            )
+
+        def set_all(state: bool):
+            for var in vars_map.values():
+                var.set(state)
+
+        actions = ttk.Frame(popup)
+        actions.grid(row=6, column=0, padx=10, pady=(6, 8), sticky="e")
+        ttk.Button(actions, text="Все", command=lambda: set_all(True)).pack(side=tk.LEFT, padx=4)
+        ttk.Button(actions, text="Ни одной", command=lambda: set_all(False)).pack(side=tk.LEFT, padx=4)
+
+        def apply_filter():
+            selected = {score for score, var in vars_map.items() if var.get()}
+            if not selected:
+                self._score_filter_set = None
+            else:
+                self._score_filter_set = selected
+            self._render_results(self._get_filtered_results())
+            popup.destroy()
+            self._score_filter_popup = None
+
+        ttk.Button(actions, text="Применить", command=apply_filter).pack(side=tk.LEFT, padx=4)
+
+    def _get_filtered_results(self):
+        if not self._score_filter_set:
+            return self.results
+        filtered = []
+        for lot in self.results:
+            score = lot.get("_score", 1)
+            if score in self._score_filter_set:
+                filtered.append(lot)
+        return filtered
+
+    def _render_results(self, results):
+        self.tree.delete(*self.tree.get_children())
+        for result in results:
+            price_display = (
+                f"{result['Цена']:,.2f}" if result["Цена"] > 0 else "Не указана"
+            )
+            score_display = self._format_score(result.get("_score", 1))
+            source = result.get("Источник", "Неизвестно")
+            self.tree.insert(
+                "",
+                "end",
+                values=(
+                    (
+                        result["Название"][:100] + "..."
+                        if len(result["Название"]) > 100
+                        else result["Название"]
+                    ),
+                    price_display,
+                    score_display,
+                    source,
+                    result["Ссылка"],
+                ),
+            )
+
+    def _format_score(self, score: int) -> str:
+        score = int(score) if isinstance(score, int) else 1
+        if score < 1 or score > 5:
+            score = 1
+        return f"{score} ★"
 
     def _setup_analysis_panel(self, parent: ttk.Frame) -> None:
         """Создает правую панель анализа выбранного тендера."""
@@ -759,10 +895,15 @@ class ProcurementApp:
             messagebox.showwarning("Поиск", "Поиск уже выполняется...")
             return
 
-        keyword = self.keyword_entry.get().strip()
-        if not keyword:
-            messagebox.showerror("Ошибка", "Введите ключевое слово для поиска")
-            self.keyword_entry.focus()
+        keywords = []
+        for kw, var in (self.search_keyword_vars or {}).items():
+            if var.get():
+                keywords.append(kw)
+        if not keywords:
+            messagebox.showerror(
+                "Ошибка",
+                "Выберите хотя бы одно ключевое слово для поиска.",
+            )
             return
 
         # Validate minimum price
@@ -818,7 +959,7 @@ class ProcurementApp:
         # Start search thread
         self.search_thread = threading.Thread(
             target=self._perform_search,
-            args=(keyword, min_price, max_price, purchase_stage, law, selected_sources),
+            args=(keywords, min_price, max_price, purchase_stage, law, selected_sources),
             daemon=True,
         )
         self.search_thread.start()
@@ -837,7 +978,7 @@ class ProcurementApp:
                 return key
         return None
 
-    def _perform_search(self, keyword, min_price, max_price, purchase_stage, law, source_names=None):
+    def _perform_search(self, keywords, min_price, max_price, purchase_stage, law, source_names=None):
         """Perform search in background thread."""
 
         def update_progress(message):
@@ -862,29 +1003,11 @@ class ProcurementApp:
             self.results = results
 
             # Update table
-            for result in results:
-                price_display = (
-                    f"{result['Цена']:,.2f}" if result["Цена"] > 0 else "Не указана"
-                )
-                source = result.get("Источник", "Неизвестно")
-                self.tree.insert(
-                    "",
-                    "end",
-                    values=(
-                        (
-                            result["Название"][:100] + "..."
-                            if len(result["Название"]) > 100
-                            else result["Название"]
-                        ),
-                        price_display,
-                        source,
-                        result["Ссылка"],
-                    ),
-                )
+            self._render_results(self._get_filtered_results())
 
             # Update status
             if results:
-                self.progress_var.set(f"Найдено результатов: {len(results)}")
+                self.progress_var.set(f"Найдено результатов: {len(results)} (с оценкой)")
                 self.export_btn.config(state="normal")
             else:
                 self.progress_var.set("Результаты не найдены")
@@ -894,24 +1017,105 @@ class ProcurementApp:
         self.root.after(0, update_ui_start)
 
         try:
-            results = self.searcher.search_procurements(
-                keyword, min_price, max_price, purchase_stage, law, update_progress, source_names
-            )
-            if CONFIG.get("LOT_PREFILTER_ENABLED"):
-                include_keywords = CONFIG.get("LOT_PREFILTER_KEYWORDS") or []
-                blacklist = CONFIG.get("LOT_PREFILTER_BLACKLIST") or []
-                top_n = CONFIG.get("LOT_PREFILTER_TOP_N", 10)
-                results = self.searcher.filter_lots_by_content(
-                    results,
-                    include_keywords,
-                    blacklist=blacklist,
-                    top_n=top_n,
-                    progress_callback=update_progress,
+            search_keywords = [k.strip() for k in (keywords or []) if isinstance(k, str) and k.strip()]
+            if not search_keywords:
+                raise ValueError("SEARCH_KEYWORDS пустой. Добавьте слова в config.py")
+
+            all_results = []
+            total_keywords = len(search_keywords)
+            for idx, kw in enumerate(search_keywords, start=1):
+                if update_progress:
+                    update_progress(f"Поиск по слову {idx}/{total_keywords}: {kw}")
+                results = self.searcher.search_procurements(
+                    kw, min_price, max_price, purchase_stage, law, update_progress, source_names
                 )
-            self.root.after(0, lambda: update_ui_finish(results))
+                all_results.extend(results)
+
+            # Дедупликация по названию + цене
+            lot_map = {}
+            for lot in all_results:
+                key = self.searcher.make_lot_cache_key(
+                    lot.get("Название"), lot.get("Цена")
+                )
+                if key not in lot_map:
+                    lot_map[key] = lot
+
+            logger.info("Lots total after dedupe: %s", len(lot_map))
+
+            # Сохраняем полный список названий перед отправкой в LLM
+            self._dump_all_lot_titles(list(lot_map.values()))
+
+            # Используем кэш, чтобы не отправлять уже проверенные лоты в LLM
+            cache = self._lot_llm_cache
+            pending = []
+            for key, lot in lot_map.items():
+                cached = cache.get(key, {})
+                score = cached.get("score") if isinstance(cached, dict) else cached
+                if not isinstance(score, int) or score < 1 or score > 5:
+                    pending.append((key, lot))
+
+            batch_size = int(CONFIG.get("LLM_BATCH_SIZE", 20) or 20)
+            if batch_size < 1:
+                batch_size = 20
+
+            if pending:
+                total_batches = (len(pending) + batch_size - 1) // batch_size
+                for batch_idx in range(total_batches):
+                    batch = pending[batch_idx * batch_size:(batch_idx + 1) * batch_size]
+                    self._append_sent_lot_titles([lot for _key, lot in batch])
+                    items = []
+                    for item_idx, (_key, lot) in enumerate(batch, start=1):
+                        items.append(
+                            {
+                                "id": str(item_idx),
+                                "title": lot.get("Название", ""),
+                                "price": lot.get("Цена"),
+                            }
+                        )
+                    if update_progress:
+                        update_progress(
+                            f"LLM: {batch_idx + 1}/{total_batches} — классификация по названию"
+                        )
+                    llm_result = self.searcher.call_llm_lot_title_filter(items)
+                    for item_idx, (key, lot) in enumerate(batch, start=1):
+                        score = llm_result.get(str(item_idx))
+                        if not isinstance(score, int):
+                            try:
+                                score = int(score)
+                            except Exception:
+                                score = 1
+                        if score < 1 or score > 5:
+                            score = 1
+                        cache[key] = {
+                            "title": lot.get("Название", ""),
+                            "price": lot.get("Цена"),
+                            "url": lot.get("Ссылка"),
+                            "source": lot.get("Источник"),
+                            "score": score,
+                        }
+                    self._save_lot_llm_cache()
+                logger.info("LLM checked lots: %s", len(pending))
+            else:
+                logger.info("LLM checked lots: 0 (all from cache)")
+
+            # Возвращаем все лоты с оценкой
+            rated_results = []
+            for key, lot in lot_map.items():
+                cached = cache.get(key, {})
+                score = cached.get("score") if isinstance(cached, dict) else cached
+                if not isinstance(score, int) or score < 1 or score > 5:
+                    score = 1
+                lot = dict(lot)
+                lot["_score"] = score
+                rated_results.append(lot)
+
+            logger.info("Lots rated: %s", len(rated_results))
+
+            self.root.after(0, lambda: update_ui_finish(rated_results))
         except Exception as e:
             logger.error(f"Search failed: {e}")
-            self.root.after(0, lambda: update_ui_finish([], str(e)))
+            err_text = str(e)
+            self.root.after(0, lambda err=err_text: update_ui_finish([], err))
 
     def save_to_excel(self):
         """Save results to Excel file."""
@@ -938,6 +1142,7 @@ class ProcurementApp:
                         "Цена (руб)": (
                             result["Цена"] if result["Цена"] > 0 else "Не указана"
                         ),
+                        "Оценка": result.get("_score", 1),
                         "Источник": result.get("Источник", "Неизвестно"),
                         "Ссылка": result["Ссылка"],
                     }
@@ -974,11 +1179,11 @@ class ProcurementApp:
         """Clear search results and reset filters."""
         self.tree.delete(*self.tree.get_children())
         self.results = []
+        self._score_filter_set = None
         self.export_btn.config(state="disabled")
         self.progress_var.set("Результаты очищены")
 
         # Reset filters
-        self.keyword_entry.delete(0, tk.END)
         self.min_price_entry.delete(0, tk.END)
         self.max_price_entry.delete(0, tk.END)
         self.stage_var.set("")
@@ -987,6 +1192,82 @@ class ProcurementApp:
         value = (self.llm_provider_var.get() or "").strip()
         if value:
             CONFIG["LLM_PROVIDER"] = value
+
+    def _load_lot_llm_cache(self):
+        path = self._lot_llm_cache_path
+        if not path or not os.path.exists(path):
+            return
+        try:
+            if os.path.getsize(path) == 0:
+                return
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                self._lot_llm_cache = data
+        except Exception as e:
+            logger.warning("Failed to load lot cache: %s", e)
+
+    def _save_lot_llm_cache(self):
+        path = self._lot_llm_cache_path
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self._lot_llm_cache, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.warning("Failed to save lot cache: %s", e)
+
+    def _toggle_select_all_keywords(self):
+        if not getattr(self, "search_keyword_vars", None):
+            return
+        all_selected = all(var.get() for var in self.search_keyword_vars.values())
+        new_state = not all_selected
+        for var in self.search_keyword_vars.values():
+            var.set(new_state)
+        if getattr(self, "select_all_btn", None):
+            self.select_all_btn.config(text="Снять все" if new_state else "Выбрать все")
+
+    def _reset_llm_cache(self):
+        self._lot_llm_cache = {}
+        self._save_lot_llm_cache()
+        for path in (
+            self._lot_titles_dump_path,
+            self._lot_titles_sent_path,
+        ):
+            if not path:
+                continue
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except Exception as e:
+                logger.warning("Failed to remove file %s: %s", path, e)
+        self.progress_var.set("Кэш LLM очищен")
+
+    def _dump_all_lot_titles(self, lots: list[dict]) -> None:
+        path = self._lot_titles_dump_path
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                for lot in lots:
+                    title = (lot.get("Название") or "").strip()
+                    price = lot.get("Цена")
+                    f.write(f"{title}\t{price}\n")
+        except Exception as e:
+            logger.warning("Failed to write lot titles dump: %s", e)
+
+    def _append_sent_lot_titles(self, lots: list[dict]) -> None:
+        path = self._lot_titles_sent_path
+        if not path:
+            return
+        try:
+            with open(path, "a", encoding="utf-8") as f:
+                for lot in lots:
+                    title = (lot.get("Название") or "").strip()
+                    price = lot.get("Цена")
+                    f.write(f"{title}\t{price}\n")
+        except Exception as e:
+            logger.warning("Failed to append sent lot titles: %s", e)
 
 
 
@@ -1005,6 +1286,30 @@ class ProcurementApp:
                     os.remove(path)
             except Exception as e:
                 logger.warning(f"Не удалось удалить временный файл {path}: {e}")
+
+        cache_path = getattr(self, "_lot_llm_cache_path", None)
+        if cache_path:
+            try:
+                if os.path.exists(cache_path):
+                    os.remove(cache_path)
+            except Exception as e:
+                logger.warning(f"Не удалось удалить временный кэш {cache_path}: {e}")
+
+        dump_path = getattr(self, "_lot_titles_dump_path", None)
+        if dump_path:
+            try:
+                if os.path.exists(dump_path):
+                    os.remove(dump_path)
+            except Exception as e:
+                logger.warning(f"Не удалось удалить файл {dump_path}: {e}")
+
+        sent_path = getattr(self, "_lot_titles_sent_path", None)
+        if sent_path:
+            try:
+                if os.path.exists(sent_path):
+                    os.remove(sent_path)
+            except Exception as e:
+                logger.warning(f"Не удалось удалить файл {sent_path}: {e}")
 
         self.root.destroy()
 

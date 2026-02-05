@@ -590,97 +590,92 @@ class ProcurementSearcher:
 
         all_results = []
 
+        def fetch_page(source, source_name, page_number):
+            url, params = source.build_search_url(
+                keyword, min_price, max_price, purchase_stage, law, page_number=page_number
+            )
+
+            logger.info(
+                f"Searching on {source_name}: {keyword!r} page={page_number} with filters - "
+                f"stage: {purchase_stage}, law: {law}, "
+                f"min_price: {min_price}, max_price: {max_price}"
+            )
+
+            logger.info(f"Requesting {url} with params: {params}")
+
+            # Для tektorg.ru используем специальную обработку параметров
+            if source_name == "tektorg.ru":
+                from urllib.parse import quote_plus, quote
+                query_parts = []
+                for key, value in params.items():
+                    if value:
+                        encoded_key = quote(key, safe="")
+                        if isinstance(value, str):
+                            if "+" in value and key in ("sumPrice_start", "sumPrice_end"):
+                                encoded_value = quote(value, safe="+")
+                            else:
+                                encoded_value = quote_plus(value)
+                        else:
+                            encoded_value = quote_plus(str(value))
+                        query_parts.append(f"{encoded_key}={encoded_value}")
+
+                if query_parts:
+                    full_url = f"{url}?{'&'.join(query_parts)}"
+                else:
+                    full_url = url
+
+                logger.info(f"Tektorg final URL: {full_url}")
+                if progress_callback:
+                    progress_callback(f"Запрос: {full_url}")
+                response = self.session.get(
+                    full_url, timeout=CONFIG["REQUEST_TIMEOUT"]
+                )
+            else:
+                response = self.session.get(
+                    url, params=params, timeout=CONFIG["REQUEST_TIMEOUT"]
+                )
+
+            response.raise_for_status()
+
+            logger.info(f"Final URL (after redirects): {response.url}")
+            if progress_callback and source_name != "tektorg.ru":
+                progress_callback(f"Запрос: {response.url}")
+
+            if progress_callback:
+                progress_callback(f"Обработка результатов с {source_name}...")
+
+            time.sleep(CONFIG["REQUEST_DELAY"])
+
+            html_content = response.text
+            if not isinstance(html_content, str):
+                html_content = response.content.decode('utf-8', errors='ignore')
+
+            source_results = source.parse_results(html_content, progress_callback)
+
+            filtered_results = []
+            for result in source_results:
+                if self._passes_price_filter(result.get("Цена", 0), min_price, max_price):
+                    result["Источник"] = source_name
+                    filtered_results.append(result)
+
+            return filtered_results
+
         for source in sources_to_use:
             source_name = source.get_name()
             try:
                 if progress_callback:
                     progress_callback(f"Поиск на {source_name}...")
 
-                url, params = source.build_search_url(
-                    keyword, min_price, max_price, purchase_stage, law
-                )
-
-                logger.info(
-                    f"Searching on {source_name}: {keyword!r} with filters - "
-                    f"stage: {purchase_stage}, law: {law}, "
-                    f"min_price: {min_price}, max_price: {max_price}"
-                )
-
-                # Для tektorg.ru может потребоваться специальная обработка параметров
-                # requests автоматически закодирует параметры, но проверим результат
-                logger.info(f"Requesting {url} with params: {params}")
-                
-                # Для tektorg.ru используем специальную обработку параметров
-                if source_name == "tektorg.ru":
-                    # Формируем query string вручную для правильной кодировки
-                    from urllib.parse import quote_plus, quote
-                    query_parts = []
-                    for key, value in params.items():
-                        if value:
-                            # Кодируем ключ: квадратные скобки должны стать %5B%5D
-                            # Используем quote (не quote_plus) для ключа, чтобы [] закодировались
-                            encoded_key = quote(key, safe="")
-                            
-                            # Для цен уже используется + вместо пробелов, поэтому не кодируем +
-                            # Для остальных значений используем quote_plus (пробелы -> +, ; -> %3B)
-                            if isinstance(value, str):
-                                # Если значение уже содержит + (это цена), не кодируем +
-                                if "+" in value and key in ("sumPrice_start", "sumPrice_end"):
-                                    # Для цен: кодируем только русские символы, но оставляем + как есть
-                                    encoded_value = quote(value, safe="+")
-                                else:
-                                    encoded_value = quote_plus(value)
-                            else:
-                                encoded_value = quote_plus(str(value))
-                            query_parts.append(f"{encoded_key}={encoded_value}")
-                    
-                    if query_parts:
-                        full_url = f"{url}?{'&'.join(query_parts)}"
-                    else:
-                        full_url = url
-                    
-                    logger.info(f"Tektorg final URL: {full_url}")
+                page = 1
+                while True:
                     if progress_callback:
-                        progress_callback(f"Запрос: {full_url}")
-                    response = self.session.get(
-                        full_url, timeout=CONFIG["REQUEST_TIMEOUT"]
-                    )
-                else:
-                    response = self.session.get(
-                        url, params=params, timeout=CONFIG["REQUEST_TIMEOUT"]
-                    )
-                
-                response.raise_for_status()
-                
-                # Логируем финальный URL для отладки
-                logger.info(f"Final URL (after redirects): {response.url}")
-                if progress_callback and source_name != "tektorg.ru":
-                    progress_callback(f"Запрос: {response.url}")
-
-                if progress_callback:
-                    progress_callback(f"Обработка результатов с {source_name}...")
-
-                time.sleep(CONFIG["REQUEST_DELAY"])
-
-                # Убеждаемся, что контент правильно декодирован
-                html_content = response.text
-                if not isinstance(html_content, str):
-                    # Если response.text не строка, пробуем декодировать вручную
-                    html_content = response.content.decode('utf-8', errors='ignore')
-
-                # Парсим результаты через источник
-                source_results = source.parse_results(html_content, progress_callback)
-
-                # Фильтруем по цене (если источник не сделал это сам)
-                filtered_results = []
-                for result in source_results:
-                    if self._passes_price_filter(result.get("Цена", 0), min_price, max_price):
-                        # Добавляем метаданные об источнике
-                        result["Источник"] = source_name
-                        filtered_results.append(result)
-
-                all_results.extend(filtered_results)
-                logger.info(f"Found {len(filtered_results)} results from {source_name}")
+                        progress_callback(f"{source_name}: страница {page}")
+                    page_results = fetch_page(source, source_name, page)
+                    if not page_results:
+                        break
+                    all_results.extend(page_results)
+                    logger.info(f"Found {len(page_results)} results from {source_name} page {page}")
+                    page += 1
 
             except Exception as e:
                 logger.error(f"Error searching on {source_name}: {e}")
@@ -690,6 +685,198 @@ class ProcurementSearcher:
 
         logger.info(f"Total results from all sources: {len(all_results)}")
         return all_results
+
+    def _normalize_title(self, title: str) -> str:
+        t = (title or "").strip().lower()
+        t = re.sub(r"\s+", " ", t)
+        return t
+
+    def _normalize_price_for_key(self, price) -> str:
+        if price is None:
+            return ""
+        if isinstance(price, (int, float)):
+            if price <= 0:
+                return ""
+            return str(int(round(price)))
+        s = str(price).replace("\xa0", " ").strip()
+        m = re.search(r"\d[\d\s.,]*\d|\d", s)
+        if not m:
+            return ""
+        num = m.group(0).replace(" ", "").replace(",", ".")
+        try:
+            val = float(num)
+        except Exception:
+            return ""
+        if val <= 0:
+            return ""
+        return str(int(round(val)))
+
+    def make_lot_cache_key(self, title, price) -> str:
+        return f"{self._normalize_title(title)}|{self._normalize_price_for_key(price)}"
+
+    def call_llm_lot_title_filter(self, items: list[dict]) -> dict:
+        if not items:
+            return {}
+
+        provider = (CONFIG.get("LLM_PROVIDER") or "cloudru").strip().lower()
+        providers = CONFIG.get("LLM_PROVIDERS") or {}
+        provider_cfg = providers.get(provider, {})
+        provider_key = (CONFIG.get("LLM_PROVIDER_KEYS") or {}).get(provider, "")
+
+        env_key = provider_cfg.get("env_key") or ""
+        api_key = (
+            CONFIG.get("LLM_API_KEY")
+            or provider_key
+            or (os.environ.get(env_key) if env_key else "")
+            or os.environ.get("API_KEY")
+            or os.environ.get("MISTRAL_API_KEY")
+            or ""
+        ).strip()
+        if not api_key:
+            raise RuntimeError("LLM key not set. Set CONFIG['LLM_API_KEY'] or CONFIG['LLM_PROVIDER_KEYS'] or env var.")
+
+        url = (
+            CONFIG.get("LLM_API_URL")
+            or provider_cfg.get("api_url")
+            or "https://api.mistral.ai/v1/chat/completions"
+        ).strip()
+        model = (
+            CONFIG.get("LLM_MODEL")
+            or provider_cfg.get("model")
+            or "mistral-large-latest"
+        ).strip()
+
+        def _format_price(price) -> str:
+            if price is None:
+                return "не указана"
+            if isinstance(price, (int, float)):
+                if price <= 0:
+                    return "не указана"
+                return f"{price:,.2f}".replace(",", " ")
+            s = str(price).strip()
+            return s if s else "не указана"
+
+        system_prompt = (
+            "Ты помощник по анализу закупок для компании ООО «Современные Технологии».\n"
+            "Контекст компании (важно для оценки соответствия):\n"
+            "ООО «Современные Технологии» специализируется на комплексном внедрении изменений и цифровых решений для "
+            "автоматизации и оптимизации бизнес-процессов предприятий различных отраслей. Компания реализует проекты по "
+            "цифровизации деятельности, управлению производственными активами, нормализации данных, управлению "
+            "организационными преобразованиями, а также оказывает услуги в сфере организационно-управленческого и "
+            "производственного консалтинга. Использует технологии ИИ, платформы для обработки нормативно-технической "
+            "документации, а также инструменты интеграции и поддержки процессов.\n\n"
+            "Нужно по НАЗВАНИЮ лота (и цене, если есть) поставить оценку соответствия профилю компании.\n"
+            "Отвечай строго JSON-объектом, где ключ — номер лота, значение — целое число от 1 до 5.\n"
+            "1 = совсем не подходит, 5 = отлично подходит.\n"
+            "Если информации недостаточно или есть сомнения — ставь 2 или 1.\n"
+            "Никаких пояснений, только JSON."
+        )
+
+        lines = ["Список лотов:"]
+        for item in items:
+            idx = str(item.get("id", "")).strip()
+            title = str(item.get("title", "")).strip()
+            price = _format_price(item.get("price"))
+            lines.append(f"{idx}) Название: {title}")
+            lines.append(f"   Цена: {price}")
+        user_prompt = "\n".join(lines)
+        safe_text = self._sanitize_for_llm(user_prompt, max_chars=8000)
+
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": safe_text},
+            ],
+            "temperature": 0.0,
+            "max_tokens": 1000,
+        }
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Accept-Encoding": "gzip, deflate",
+        }
+
+        try:
+            resp = self.session.post(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=CONFIG.get("LLM_REQUEST_TIMEOUT", CONFIG["REQUEST_TIMEOUT"]),
+            )
+            resp.raise_for_status()
+        except requests.RequestException as e:
+            logger.warning("LLM request failed once: %s. Retrying...", e)
+            time.sleep(1.0)
+            resp = self.session.post(
+                url,
+                headers=headers,
+                json=payload,
+                timeout=CONFIG.get("LLM_REQUEST_TIMEOUT", CONFIG["REQUEST_TIMEOUT"]),
+            )
+            resp.raise_for_status()
+
+        try:
+            resp_json = resp.json()
+        except Exception as err:
+            logger.warning("LLM response is not JSON: %s; text=%s", err, (resp.text or "")[:2000])
+            return {str(item.get("id")): "не подходит" for item in items}
+
+        content = ""
+        try:
+            content = (resp_json.get("choices", [{}])[0].get("message", {}).get("content") or "").strip()
+        except Exception:
+            content = ""
+
+        try:
+            debug_path = os.path.join(os.getcwd(), "llm_title_raw.txt")
+            with open(debug_path, "a", encoding="utf-8") as f:
+                f.write("\n===== LLM RAW RESPONSE =====\n")
+                f.write(content or "")
+                f.write("\n============================\n")
+        except Exception as e:
+            logger.warning("Failed to write LLM raw response: %s", e)
+
+        def _extract_json_object(text: str) -> dict:
+            if not text:
+                return {}
+            cleaned = text.strip()
+            cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+            cleaned = re.sub(r"\s*```$", "", cleaned)
+            l = cleaned.find("{")
+            r = cleaned.rfind("}")
+            if l == -1 or r == -1 or r <= l:
+                return {}
+            candidate = cleaned[l:r + 1].strip()
+            if not candidate:
+                return {}
+            try:
+                return json.loads(candidate)
+            except Exception as parse_err:
+                logger.warning("LLM JSON parse error: %s; candidate=%s", parse_err, candidate[:2000])
+                return {}
+
+        data = _extract_json_object(content)
+
+        result = {}
+        for item in items:
+            key = str(item.get("id"))
+            raw = data.get(key)
+            score = 1
+            try:
+                score = int(raw)
+            except Exception:
+                try:
+                    score = int(str(raw).strip())
+                except Exception:
+                    score = 1
+            if score < 1 or score > 5:
+                score = 1
+            result[key] = score
+
+        return result
 
     def _normalize_keywords(self, keywords):
         norm = []
