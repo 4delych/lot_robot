@@ -673,12 +673,12 @@ class ProcurementApp:
         item = self.tree.selection()[0] if self.tree.selection() else None
         if item:
             values = self.tree.item(item, "values")
-            # Теперь ссылка на 4-й позиции (после Источника)
-            if len(values) >= 4 and values[3] != "Ссылка не найдена":
+            # Ссылка теперь на 5-й позиции (0:Название, 1:Цена, 2:Оценка, 3:Источник, 4:Ссылка)
+            if len(values) >= 5 and values[4] != "Ссылка не найдена":
                 import webbrowser
 
                 try:
-                    webbrowser.open(values[3])
+                    webbrowser.open(values[4])
                 except Exception as e:
                     messagebox.showerror("Ошибка", f"Не удалось открыть ссылку:\n{e}")
 
@@ -699,10 +699,10 @@ class ProcurementApp:
 
         item = selection[0]
         values = self.tree.item(item, "values")
-        if len(values) < 4:
+        if len(values) < 5:
             return
 
-        title, price, source, url = values[0], values[1], values[2], values[3]
+        title, price, score, source, url = values[0], values[1], values[2], values[3], values[4]
         self.current_lot = {
             "title": title,
             "price": price,
@@ -1323,14 +1323,14 @@ class ProcurementApp:
 
         item = selection[0]
         values = self.tree.item(item, "values")
-        if len(values) < 4:
+        if len(values) < 5:
             messagebox.showerror("Ошибка", "Не удалось прочитать данные выбранного лота")
             return
 
         lot_title = values[0]
         lot_price_str = values[1]  # ✅ Цена из таблицы
-        lot_source = values[2]
-        lot_url = values[3]
+        lot_source = values[3]  # Источник (индекс изменился, появилась оценка в позиции 2)
+        lot_url = values[4]  # Ссылка (сдвинулась на позицию 4)
 
         if not lot_url or lot_url == "Ссылка не найдена":
             messagebox.showerror("Ошибка", "Неверная ссылка на лот")
@@ -1459,8 +1459,8 @@ class ProcurementApp:
 
         item = selection[0]
         values = self.tree.item(item, "values")
-        # Ссылка теперь на 4-й позиции
-        lot_url = values[3] if len(values) >= 4 else None
+        # Ссылка теперь на 5-й позиции (0:Название, 1:Цена, 2:Оценка, 3:Источник, 4:Ссылка)
+        lot_url = values[4] if len(values) >= 5 else None
 
         if not lot_url or lot_url == "Ссылка не найдена":
             messagebox.showerror("Ошибка", "Неверная ссылка на лот")

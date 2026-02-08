@@ -1,10 +1,20 @@
-pandas>=2.0.0
+# HTTP запросы и парсинг
 requests>=2.31.0
 beautifulsoup4>=4.12.0
+lxml>=4.9.0
+
+# Работа с данными
+pandas>=2.0.0
+
+# Работа с документами
 openpyxl>=3.1.0
 python-docx>=1.1.0
 xlrd>=2.0.1
+
+# Windows специфичное (для работы с COM объектами)
 pywin32>=306; platform_system=="Windows"
-lxml>=4.9.0
+
+# Логирование (встроенный модуль, но указан для полноты)
+# logging встроенный в Python
 
 
