@@ -31,6 +31,10 @@ class ProcurementApp:
         self.search_thread = None
         self.analysis_results = []
         self._temp_doc_files = []
+        self._lot_report_cache = {}
+        self._tree_item_full = {}
+        self._selected_lots = []
+        self.custom_search_keywords = []
         self._lot_llm_cache = {}
         self._lot_llm_cache_path = None
         self._lot_titles_dump_path = None
@@ -273,29 +277,43 @@ class ProcurementApp:
         keywords_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         keywords_frame.columnconfigure(0, weight=1)
 
+        self.base_search_keywords = [
+            k.strip()
+            for k in (CONFIG.get("SEARCH_KEYWORDS") or [])
+            if isinstance(k, str) and k.strip()
+        ]
+        self.search_keyword_list = list(self.base_search_keywords)
         self.search_keyword_vars = {}
-        self.search_keyword_list = [k.strip() for k in (CONFIG.get("SEARCH_KEYWORDS") or []) if isinstance(k, str) and k.strip()]
 
-        if not self.search_keyword_list:
-            ttk.Label(
-                keywords_frame,
-                text="Список ключевых слов пуст. Заполните SEARCH_KEYWORDS в config.py",
-                foreground="#B91C1C",
-                wraplength=420,
-            ).grid(row=0, column=0, sticky="w", pady=2)
-        else:
-            for i, kw in enumerate(self.search_keyword_list):
-                var = tk.BooleanVar(value=True)
-                self.search_keyword_vars[kw] = var
-                cb = ttk.Checkbutton(keywords_frame, text=kw, variable=var)
-                cb.grid(row=i, column=0, sticky="w")
+        self.keyword_checks_frame = ttk.Frame(keywords_frame)
+        self.keyword_checks_frame.grid(row=0, column=0, sticky="ew")
+        self.keyword_checks_frame.columnconfigure(0, weight=1)
 
         self.select_all_btn = ttk.Button(
             keywords_frame, text="Снять все", command=self._toggle_select_all_keywords
         )
-        if not self.search_keyword_list:
-            self.select_all_btn.config(state="disabled", text="Выбрать все")
-        self.select_all_btn.grid(row=0, column=1, sticky="e", padx=(10, 0))
+        self.select_all_btn.grid(row=0, column=1, sticky="ne", padx=(10, 0))
+
+        add_keyword_frame = ttk.Frame(keywords_frame)
+        add_keyword_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        add_keyword_frame.columnconfigure(0, weight=1)
+
+        self.custom_keyword_var = tk.StringVar(value="")
+        self.custom_keyword_entry = ttk.Entry(
+            add_keyword_frame,
+            textvariable=self.custom_keyword_var,
+        )
+        self.custom_keyword_entry.grid(row=0, column=0, sticky="ew")
+        self.custom_keyword_entry.bind("<Return>", self._add_custom_keyword)
+
+        self.add_keyword_btn = ttk.Button(
+            add_keyword_frame,
+            text="Добавить слово",
+            command=self._add_custom_keyword,
+        )
+        self.add_keyword_btn.grid(row=0, column=1, sticky="w", padx=(8, 0))
+
+        self._render_keyword_checkboxes()
 
         self._filter_blocks = [price_frame, filters_frame, sources_frame, keywords_frame]
 
@@ -384,7 +402,7 @@ class ProcurementApp:
         table_frame.columnconfigure(0, weight=1)
         table_frame.rowconfigure(0, weight=1)
 
-        columns = ("Название", "Цена", "Оценка", "Источник", "Ссылка")
+        columns = ("Выбор", "Название", "Цена", "Оценка", "Источник", "Ссылка")
         self.tree_default_height = 15
         self.tree_expanded_height = 25
         self.tree = ttk.Treeview(
@@ -393,15 +411,18 @@ class ProcurementApp:
             show="headings",
             height=self.tree_default_height,
             style="App.Treeview",
+            selectmode="extended",
         )
 
+        self.tree.heading("Выбор", text="Выбор", anchor="center")
         self.tree.heading("Название", text="Название", anchor="w")
         self.tree.heading("Цена", text="Цена (руб)", anchor="e")
         self.tree.heading("Оценка", text="Оценка", anchor="center", command=self._toggle_score_filter_popup)
         self.tree.heading("Источник", text="Источник", anchor="w")
         self.tree.heading("Ссылка", text="Ссылка", anchor="w")
 
-        self.tree.column("Название", width=330, anchor="w")
+        self.tree.column("Выбор", width=70, anchor="center")
+        self.tree.column("Название", width=300, anchor="w")
         self.tree.column("Цена", width=120, anchor="e")
         self.tree.column("Оценка", width=80, anchor="center")
         self.tree.column("Источник", width=120, anchor="w")
@@ -422,6 +443,7 @@ class ProcurementApp:
         h_scrollbar.grid(row=1, column=0, sticky=(tk.W, tk.E))
 
         self.tree.bind("<Double-1>", self._on_item_double_click)
+        self.tree.bind("<Button-1>", self._on_tree_click, add="+")
         self.tree.bind("<<TreeviewSelect>>", self._on_result_select)
 
         self._score_filter_set = None
@@ -503,16 +525,22 @@ class ProcurementApp:
 
     def _render_results(self, results):
         self.tree.delete(*self.tree.get_children())
+        self._tree_item_full = {}
+        self._selected_lots = []
+        if getattr(self, "selected_lots_listbox", None):
+            self._update_selected_lots_listbox()
+        self.current_lot = None
         for result in results:
             price_display = (
                 f"{result['Цена']:,.2f}" if result["Цена"] > 0 else "Не указана"
             )
             score_display = self._format_score(result.get("_score", 1))
             source = result.get("Источник", "Неизвестно")
-            self.tree.insert(
+            item = self.tree.insert(
                 "",
                 "end",
                 values=(
+                    "[ ]",
                     (
                         result["Название"][:100] + "..."
                         if len(result["Название"]) > 100
@@ -524,6 +552,13 @@ class ProcurementApp:
                     result["Ссылка"],
                 ),
             )
+            self._tree_item_full[item] = {
+                "title": result.get("Название"),
+                "price": result.get("Цена"),
+                "price_display": price_display,
+                "source": source,
+                "url": result.get("Ссылка"),
+            }
 
     def _format_score(self, score: int) -> str:
         score = int(score) if isinstance(score, int) else 1
@@ -538,13 +573,30 @@ class ProcurementApp:
         header_frame.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         header_frame.columnconfigure(0, weight=1)
 
-        self.detail_title_label = ttk.Label(
+        ttk.Label(
             header_frame,
-            text="Лот не выбран",
-            font=("Segoe UI", 12, "bold"),
-            wraplength=380,
+            text="Выбранные лоты",
+            font=("Segoe UI", 10, "bold"),
+        ).grid(row=0, column=0, sticky="w")
+
+        list_frame = ttk.Frame(header_frame)
+        list_frame.grid(row=1, column=0, sticky="ew", pady=(4, 2))
+        list_frame.columnconfigure(0, weight=1)
+
+        self.selected_lots_listbox = tk.Listbox(
+            list_frame,
+            height=6,
+            activestyle="dotbox",
+            exportselection=False,
         )
-        self.detail_title_label.grid(row=0, column=0, sticky="w")
+        self.selected_lots_listbox.grid(row=0, column=0, sticky="ew")
+
+        list_scroll = ttk.Scrollbar(
+            list_frame, orient="vertical", command=self.selected_lots_listbox.yview
+        )
+        list_scroll.grid(row=0, column=1, sticky="ns")
+        self.selected_lots_listbox.configure(yscrollcommand=list_scroll.set)
+        self.selected_lots_listbox.bind("<<ListboxSelect>>", self._on_selected_lot_list_select)
 
         self.detail_meta_label = ttk.Label(
             header_frame,
@@ -553,7 +605,7 @@ class ProcurementApp:
             foreground="#64748B",
             wraplength=380,
         )
-        self.detail_meta_label.grid(row=1, column=0, sticky="w", pady=(2, 0))
+        self.detail_meta_label.grid(row=2, column=0, sticky="w", pady=(2, 0))
 
         # Блок статуса и кнопки запуска анализа
         cta_frame = ttk.LabelFrame(parent, text="AI-анализ документов", padding=8)
@@ -673,12 +725,12 @@ class ProcurementApp:
         item = self.tree.selection()[0] if self.tree.selection() else None
         if item:
             values = self.tree.item(item, "values")
-            # Ссылка теперь на 5-й позиции (0:Название, 1:Цена, 2:Оценка, 3:Источник, 4:Ссылка)
-            if len(values) >= 5 and values[4] != "Ссылка не найдена":
+            # Ссылка на 6-й позиции (0:Выбор, 1:Название, 2:Цена, 3:Оценка, 4:Источник, 5:Ссылка)
+            if len(values) >= 6 and values[5] != "Ссылка не найдена":
                 import webbrowser
 
                 try:
-                    webbrowser.open(values[4])
+                    webbrowser.open(values[5])
                 except Exception as e:
                     messagebox.showerror("Ошибка", f"Не удалось открыть ссылку:\n{e}")
 
@@ -686,39 +738,157 @@ class ProcurementApp:
         """Обновляет правую панель при выборе строки в таблице."""
         selection = self.tree.selection()
         if not selection:
-            self.current_lot = None
-            self.detail_title_label.config(text="Лот не выбран")
-            self.detail_meta_label.config(
-                text="Выберите лот слева для просмотра деталей и запуска AI-анализа"
-            )
-            self.lot_analyze_btn.config(state="disabled")
-            self.open_source_btn.config(state="disabled")
-            self.analysis_state_var.set("Idle")
-            self._reset_verdict_view()
+            if not self._selected_lots:
+                self.current_lot = None
+                self.detail_meta_label.config(
+                    text="Выберите лот слева для просмотра деталей и запуска AI-анализа"
+                )
+                self.lot_analyze_btn.config(state="disabled")
+                self.open_source_btn.config(state="disabled")
+                self.analysis_state_var.set("Idle")
+                self._reset_verdict_view()
             return
 
         item = selection[0]
-        values = self.tree.item(item, "values")
-        if len(values) < 5:
-            return
+        lot = self._tree_item_full.get(item)
+        if not lot:
+            values = self.tree.item(item, "values")
+            if len(values) < 6:
+                return
+            lot = {
+                "title": values[1],
+                "price_display": values[2],
+                "source": values[4],
+                "url": values[5],
+            }
+        self._set_active_lot(lot)
 
-        title, price, score, source, url = values[0], values[1], values[2], values[3], values[4]
-        self.current_lot = {
-            "title": title,
-            "price": price,
-            "source": source,
-            "url": url,
-        }
-        meta_text = f"Цена: {price} · Источник: {source}"
-        self.detail_title_label.config(text=title)
+    def _on_tree_click(self, event):
+        region = self.tree.identify("region", event.x, event.y)
+        if region != "cell":
+            return
+        column = self.tree.identify_column(event.x)
+        if column != "#1":
+            return
+        item = self.tree.identify_row(event.y)
+        if not item:
+            return
+        values = list(self.tree.item(item, "values"))
+        if not values:
+            return
+        values[0] = "[x]" if values[0] != "[x]" else "[ ]"
+        self.tree.item(item, values=values)
+        self._refresh_selected_lots_from_tree()
+        self._update_selected_lots_listbox()
+        if self._selected_lots:
+            current_key = self._lot_report_key(self.current_lot) if self.current_lot else None
+            selected_keys = {self._lot_report_key(lot) for lot in self._selected_lots}
+            if current_key not in selected_keys:
+                self._set_active_lot(self._selected_lots[0])
+        else:
+            self.current_lot = None
+            self.detail_meta_label.config(
+                text="Выберите лот слева для просмотра деталей и запуска AI-анализа"
+            )
+            self.open_source_btn.config(state="disabled")
+            self.analysis_state_var.set("Idle")
+            self._reset_verdict_view()
+
+    def _refresh_selected_lots_from_tree(self):
+        self._selected_lots = []
+        for item in self.tree.get_children():
+            values = self.tree.item(item, "values")
+            if len(values) < 6:
+                continue
+            if values[0] != "[x]":
+                continue
+            lot = self._tree_item_full.get(item)
+            if not lot:
+                lot = {
+                    "title": values[1],
+                    "price_display": values[2],
+                    "source": values[4],
+                    "url": values[5],
+                }
+            self._selected_lots.append(lot)
+
+    def _update_selected_lots_listbox(self):
+        self.selected_lots_listbox.delete(0, tk.END)
+        for lot in self._selected_lots:
+            title = (lot.get("title") or "").strip()
+            self.selected_lots_listbox.insert(tk.END, title or "Без названия")
+        self.lot_analyze_btn.config(
+            state="normal" if self._selected_lots else "disabled"
+        )
+        if not self._selected_lots:
+            self.open_source_btn.config(state="disabled")
+            return
+        current_key = self._lot_report_key(self.current_lot) if self.current_lot else None
+        if current_key:
+            for idx, lot in enumerate(self._selected_lots):
+                if self._lot_report_key(lot) == current_key:
+                    self.selected_lots_listbox.selection_clear(0, tk.END)
+                    self.selected_lots_listbox.selection_set(idx)
+                    self.selected_lots_listbox.activate(idx)
+                    break
+
+    def _on_selected_lot_list_select(self, event=None):
+        selection = self.selected_lots_listbox.curselection()
+        if not selection:
+            return
+        idx = selection[0]
+        if idx < 0 or idx >= len(self._selected_lots):
+            return
+        self._set_active_lot(self._selected_lots[idx])
+
+    def _lot_report_key(self, lot: dict) -> str:
+        url = (lot or {}).get("url")
+        if url and url != "Ссылка не найдена":
+            return f"url::{url}"
+        title = (lot or {}).get("title")
+        price = (lot or {}).get("price")
+        if hasattr(self, "searcher") and hasattr(self.searcher, "make_lot_cache_key"):
+            return self.searcher.make_lot_cache_key(title, price)
+        return f"title::{title}"
+
+    def _set_active_lot(self, lot: dict):
+        if not lot:
+            return
+        self.current_lot = lot
+        price_display = lot.get("price_display")
+        if not price_display:
+            price_val = lot.get("price")
+            if isinstance(price_val, (int, float)) and price_val > 0:
+                price_display = f"{price_val:,.2f}"
+            elif price_val:
+                price_display = str(price_val)
+            else:
+                price_display = "Не указана"
+        source = lot.get("source") or "Неизвестно"
+        url = lot.get("url")
+        meta_text = f"Цена: {price_display} · Источник: {source}"
         self.detail_meta_label.config(text=meta_text)
-        self.lot_analyze_btn.config(state="normal")
+        self.lot_analyze_btn.config(
+            state="normal" if self._selected_lots else "disabled"
+        )
         self.open_source_btn.config(
             state="normal" if url and url != "Ссылка не найдена" else "disabled"
         )
-        # сбрасываем прошлый результат анализа для нового выбора
-        self.analysis_state_var.set("Idle")
-        self._reset_verdict_view()
+        cache_key = self._lot_report_key(lot)
+        cached = self._lot_report_cache.get(cache_key)
+        if cached:
+            self.analysis_state_var.set("Готово")
+            self._fill_report_text(
+                lot_title=cached.get("lot_title"),
+                lot_url=cached.get("lot_url"),
+                lot_source=cached.get("lot_source"),
+                lot_price=cached.get("lot_price"),
+                lot_deadline=cached.get("lot_deadline"),
+                llm_data=cached.get("llm_data") or {},
+            )
+        else:
+            self.analysis_state_var.set("Idle")
+            self._reset_verdict_view()
 
     def _reset_verdict_view(self):
         """Сбрасывает отображение вердикта и отчета."""
@@ -1224,8 +1394,66 @@ class ProcurementApp:
         new_state = not all_selected
         for var in self.search_keyword_vars.values():
             var.set(new_state)
-        if getattr(self, "select_all_btn", None):
-            self.select_all_btn.config(text="Снять все" if new_state else "Выбрать все")
+        self._update_select_all_button_text()
+
+    def _update_select_all_button_text(self):
+        if not getattr(self, "select_all_btn", None):
+            return
+        if not getattr(self, "search_keyword_vars", None):
+            self.select_all_btn.config(state="disabled", text="Выбрать все")
+            return
+        all_selected = all(var.get() for var in self.search_keyword_vars.values())
+        self.select_all_btn.config(
+            state="normal",
+            text="Снять все" if all_selected else "Выбрать все",
+        )
+
+    def _render_keyword_checkboxes(self):
+        if not getattr(self, "keyword_checks_frame", None):
+            return
+
+        prev_state = {}
+        for kw, var in (self.search_keyword_vars or {}).items():
+            prev_state[kw] = bool(var.get())
+
+        for child in self.keyword_checks_frame.winfo_children():
+            child.destroy()
+
+        self.search_keyword_list = list(self.base_search_keywords) + list(self.custom_search_keywords)
+        self.search_keyword_vars = {}
+
+        if not self.search_keyword_list:
+            ttk.Label(
+                self.keyword_checks_frame,
+                text="Список ключевых слов пуст. Заполните SEARCH_KEYWORDS в config.py",
+                foreground="#B91C1C",
+                wraplength=420,
+            ).grid(row=0, column=0, sticky="w", pady=2)
+            self._update_select_all_button_text()
+            return
+
+        for i, kw in enumerate(self.search_keyword_list):
+            is_checked = prev_state.get(kw, True)
+            var = tk.BooleanVar(value=is_checked)
+            self.search_keyword_vars[kw] = var
+            cb = ttk.Checkbutton(self.keyword_checks_frame, text=kw, variable=var)
+            cb.grid(row=i, column=0, sticky="w")
+
+        self._update_select_all_button_text()
+
+    def _add_custom_keyword(self, event=None):
+        keyword = (self.custom_keyword_var.get() or "").strip()
+        if not keyword:
+            return
+
+        existing = {k.lower() for k in self.search_keyword_list}
+        if keyword.lower() in existing:
+            self.custom_keyword_var.set("")
+            return
+
+        self.custom_search_keywords.append(keyword)
+        self.custom_keyword_var.set("")
+        self._render_keyword_checkboxes()
 
     def _reset_llm_cache(self):
         self._lot_llm_cache = {}
@@ -1316,42 +1544,97 @@ class ProcurementApp:
     # МЕТОДЫ ДЛЯ РАБОТЫ С ДОКУМЕНТАМИ
     def analyze_lot_report(self):
         """Формирует отчет по выбранному лоту (общая инфо + аналитика документов через LLM)."""
-        selection = self.tree.selection()
-        if not selection:
-            messagebox.showwarning("Предупреждение", "Выберите лот для анализа")
-            return
-
-        item = selection[0]
-        values = self.tree.item(item, "values")
-        if len(values) < 5:
-            messagebox.showerror("Ошибка", "Не удалось прочитать данные выбранного лота")
-            return
-
-        lot_title = values[0]
-        lot_price_str = values[1]  # ✅ Цена из таблицы
-        lot_source = values[3]  # Источник (индекс изменился, появилась оценка в позиции 2)
-        lot_url = values[4]  # Ссылка (сдвинулась на позицию 4)
-
-        if not lot_url or lot_url == "Ссылка не найдена":
-            messagebox.showerror("Ошибка", "Неверная ссылка на лот")
-            return
+        lots = []
+        if self._selected_lots:
+            lots = list(self._selected_lots)
+        else:
+            selection = self.tree.selection()
+            if not selection:
+                messagebox.showwarning("Предупреждение", "Выберите лот для анализа")
+                return
+            item = selection[0]
+            lot = self._tree_item_full.get(item)
+            if not lot:
+                values = self.tree.item(item, "values")
+                if len(values) < 6:
+                    messagebox.showerror("Ошибка", "Не удалось прочитать данные выбранного лота")
+                    return
+                lot = {
+                    "title": values[1],
+                    "price_display": values[2],
+                    "source": values[4],
+                    "url": values[5],
+                }
+            lots = [lot]
 
         thread = threading.Thread(
-            target=self._perform_lot_report,
-            args=(lot_title, lot_url, lot_source, lot_price_str),
+            target=self._perform_lot_reports_batch,
+            args=(lots,),
             daemon=True,
         )
         thread.start()
 
-    def _perform_lot_report(self, lot_title: str, lot_url: str, lot_source: str, lot_price_str: str):
+    def _perform_lot_reports_batch(self, lots: list[dict]):
         def update_progress(message):
             self.root.after(0, lambda: self.progress_var.set(message))
 
+        if not lots:
+            return
+        valid_lots = []
+        invalid_count = 0
+        for lot in lots:
+            url = (lot or {}).get("url")
+            if not url or url == "Ссылка не найдена":
+                invalid_count += 1
+                continue
+            valid_lots.append(lot)
+        if invalid_count:
+            self.root.after(
+                0,
+                lambda: messagebox.showwarning(
+                    "Предупреждение",
+                    f"Пропущено лотов без корректной ссылки: {invalid_count}",
+                ),
+            )
+        lots = valid_lots
+        if not lots:
+            return
         self.root.after(0, lambda: self.progress_bar.start())
+        try:
+            total = len(lots)
+            for idx, lot in enumerate(lots, start=1):
+                prefix = f"Лот {idx}/{total}: "
+                update_progress(f"{prefix}подготовка")
+                self._perform_lot_report(lot, manage_progress=False, progress_prefix=prefix)
+        finally:
+            self.root.after(0, lambda: self.progress_bar.stop())
+
+    def _perform_lot_report(
+        self,
+        lot: dict,
+        manage_progress: bool = True,
+        progress_prefix: str = "",
+    ):
+        def update_progress(message):
+            self.root.after(0, lambda: self.progress_var.set(message))
+
+        lot_title = (lot.get("title") or "").strip()
+        lot_url = lot.get("url")
+        lot_source = lot.get("source") or "Неизвестно"
+        lot_price_str = lot.get("price_display") or lot.get("price") or ""
+
+        if not lot_url or lot_url == "Ссылка не найдена":
+            if manage_progress:
+                self.root.after(0, lambda: messagebox.showerror("Ошибка", "Неверная ссылка на лот"))
+            return
+
+        if manage_progress:
+            self.root.after(0, lambda: self.progress_bar.start())
+        self.root.after(0, lambda: self.analysis_state_var.set("Выполняется..."))
 
         try:
             # ✅ Общая информация: дедлайн + цена из таблицы
-            update_progress("Получение срока окончания подачи заявок...")
+            update_progress(f"{progress_prefix}Получение срока окончания подачи заявок...")
             lot_deadline = self.searcher.get_application_deadline(lot_url) or "—"
 
             lot_price = (lot_price_str or "").strip()
@@ -1359,13 +1642,13 @@ class ProcurementApp:
                 lot_price = "Не указана"
 
             # ✅ Документы + LLM
-            update_progress("Скачивание документов лота...")
+            update_progress(f"{progress_prefix}Скачивание документов лота...")
             documents = self.searcher.download_documents(lot_url, update_progress)
 
-            update_progress("Объединение текста документов...")
+            update_progress(f"{progress_prefix}Объединение текста документов...")
             combined_text = self.searcher.build_lot_documents_text(documents)
 
-            update_progress("LLM-анализ (цели/сроки/требования)...")
+            update_progress(f"{progress_prefix}LLM-анализ (цели/сроки/требования)...")
             try:
                 llm_data = self.searcher.call_llm_lot_analysis(combined_text)
             except Exception as err:
@@ -1376,6 +1659,16 @@ class ProcurementApp:
                     "work_and_submission_timelines": "Сроки работ: —; Сроки подачи: —",
                     "fit_summary": "—",
                 }
+
+            cache_key = self._lot_report_key(lot)
+            self._lot_report_cache[cache_key] = {
+                "lot_title": lot_title,
+                "lot_url": lot_url,
+                "lot_source": lot_source,
+                "lot_price": lot_price,
+                "lot_deadline": lot_deadline,
+                "llm_data": llm_data,
+            }
 
             self.root.after(
                 0,
@@ -1388,6 +1681,7 @@ class ProcurementApp:
                     llm_data=llm_data,
                 ),
             )
+            self.root.after(0, lambda: self.analysis_state_var.set("Готово"))
 
         except Exception as e:
             logger.error("Lot report failed: %s", e)
@@ -1400,7 +1694,8 @@ class ProcurementApp:
                 )
             )
         finally:
-            self.root.after(0, lambda: self.progress_bar.stop())
+            if manage_progress:
+                self.root.after(0, lambda: self.progress_bar.stop())
 
     def _show_lot_report_window(self, lot_title: str, lot_url: str, lot_source: str,
                                 lot_price: str, lot_deadline: str,
@@ -1459,8 +1754,8 @@ class ProcurementApp:
 
         item = selection[0]
         values = self.tree.item(item, "values")
-        # Ссылка теперь на 5-й позиции (0:Название, 1:Цена, 2:Оценка, 3:Источник, 4:Ссылка)
-        lot_url = values[4] if len(values) >= 5 else None
+        # Ссылка на 6-й позиции (0:Выбор, 1:Название, 2:Цена, 3:Оценка, 4:Источник, 5:Ссылка)
+        lot_url = values[5] if len(values) >= 6 else None
 
         if not lot_url or lot_url == "Ссылка не найдена":
             messagebox.showerror("Ошибка", "Неверная ссылка на лот")
