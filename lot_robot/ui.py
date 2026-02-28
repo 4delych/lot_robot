@@ -276,26 +276,41 @@ class ProcurementApp:
         )
         keywords_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         keywords_frame.columnconfigure(0, weight=1)
+        keywords_frame.columnconfigure(1, weight=1)
 
         self.base_search_keywords = [
             k.strip()
             for k in (CONFIG.get("SEARCH_KEYWORDS") or [])
             if isinstance(k, str) and k.strip()
         ]
-        self.search_keyword_list = list(self.base_search_keywords)
         self.search_keyword_vars = {}
+        self.custom_search_keyword_vars = {}
 
-        self.keyword_checks_frame = ttk.Frame(keywords_frame)
+        base_keywords_frame = ttk.LabelFrame(keywords_frame, text="Из конфигурации", padding="5")
+        base_keywords_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        base_keywords_frame.columnconfigure(0, weight=1)
+
+        custom_keywords_frame = ttk.LabelFrame(
+            keywords_frame, text="Добавленные слова", padding="5"
+        )
+        custom_keywords_frame.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+        custom_keywords_frame.columnconfigure(0, weight=1)
+
+        self.keyword_checks_frame = ttk.Frame(base_keywords_frame)
         self.keyword_checks_frame.grid(row=0, column=0, sticky="ew")
         self.keyword_checks_frame.columnconfigure(0, weight=1)
+
+        self.custom_keyword_checks_frame = ttk.Frame(custom_keywords_frame)
+        self.custom_keyword_checks_frame.grid(row=0, column=0, sticky="ew")
+        self.custom_keyword_checks_frame.columnconfigure(0, weight=1)
 
         self.select_all_btn = ttk.Button(
             keywords_frame, text="Снять все", command=self._toggle_select_all_keywords
         )
-        self.select_all_btn.grid(row=0, column=1, sticky="ne", padx=(10, 0))
+        self.select_all_btn.grid(row=1, column=1, sticky="e", padx=(8, 0), pady=(6, 0))
 
         add_keyword_frame = ttk.Frame(keywords_frame)
-        add_keyword_frame.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        add_keyword_frame.grid(row=1, column=0, sticky="ew", pady=(6, 0))
         add_keyword_frame.columnconfigure(0, weight=1)
 
         self.custom_keyword_var = tk.StringVar(value="")
@@ -314,6 +329,7 @@ class ProcurementApp:
         self.add_keyword_btn.grid(row=0, column=1, sticky="w", padx=(8, 0))
 
         self._render_keyword_checkboxes()
+        self._render_custom_keyword_checkboxes()
 
         self._filter_blocks = [price_frame, filters_frame, sources_frame, keywords_frame]
 
@@ -940,6 +956,13 @@ class ProcurementApp:
 
         return "Неопределенно", "uncertain"
 
+    def _verdict_type_from_label(self, label: str) -> str:
+        if label == "Подходит":
+            return "suitable"
+        if label == "Не подходит":
+            return "not_suitable"
+        return "uncertain"
+
     def _fill_report_text(
         self,
         lot_title: str,
@@ -957,12 +980,17 @@ class ProcurementApp:
             "Сроки работ: —; Сроки подачи: —",
         )
         fit_summary = llm_data.get("fit_summary", "—")
+        final_verdict = (llm_data.get("final_verdict") or "").strip()
 
         self.report_text.config(state=tk.NORMAL)
         self.report_text.delete("1.0", tk.END)
 
         # Финальный вердикт
-        verdict_label, verdict_type = self._derive_verdict_from_summary(fit_summary)
+        if final_verdict in ("Подходит", "Не подходит", "Неопределенно"):
+            verdict_label = final_verdict
+            verdict_type = self._verdict_type_from_label(final_verdict)
+        else:
+            verdict_label, verdict_type = self._derive_verdict_from_summary(fit_summary)
         self.verdict_label_var.set(f"Итоговый вердикт: {verdict_label}")
         self.verdict_explanation_var.set(fit_summary or "—")
         self._set_verdict_style(verdict_type)
@@ -1067,6 +1095,9 @@ class ProcurementApp:
 
         keywords = []
         for kw, var in (self.search_keyword_vars or {}).items():
+            if var.get():
+                keywords.append(kw)
+        for kw, var in (self.custom_search_keyword_vars or {}).items():
             if var.get():
                 keywords.append(kw)
         if not keywords:
@@ -1388,21 +1419,27 @@ class ProcurementApp:
             logger.warning("Failed to save lot cache: %s", e)
 
     def _toggle_select_all_keywords(self):
-        if not getattr(self, "search_keyword_vars", None):
+        all_vars = []
+        all_vars.extend((self.search_keyword_vars or {}).values())
+        all_vars.extend((self.custom_search_keyword_vars or {}).values())
+        if not all_vars:
             return
-        all_selected = all(var.get() for var in self.search_keyword_vars.values())
+        all_selected = all(var.get() for var in all_vars)
         new_state = not all_selected
-        for var in self.search_keyword_vars.values():
+        for var in all_vars:
             var.set(new_state)
         self._update_select_all_button_text()
 
     def _update_select_all_button_text(self):
         if not getattr(self, "select_all_btn", None):
             return
-        if not getattr(self, "search_keyword_vars", None):
+        all_vars = []
+        all_vars.extend((self.search_keyword_vars or {}).values())
+        all_vars.extend((self.custom_search_keyword_vars or {}).values())
+        if not all_vars:
             self.select_all_btn.config(state="disabled", text="Выбрать все")
             return
-        all_selected = all(var.get() for var in self.search_keyword_vars.values())
+        all_selected = all(var.get() for var in all_vars)
         self.select_all_btn.config(
             state="normal",
             text="Снять все" if all_selected else "Выбрать все",
@@ -1419,10 +1456,9 @@ class ProcurementApp:
         for child in self.keyword_checks_frame.winfo_children():
             child.destroy()
 
-        self.search_keyword_list = list(self.base_search_keywords) + list(self.custom_search_keywords)
         self.search_keyword_vars = {}
 
-        if not self.search_keyword_list:
+        if not self.base_search_keywords:
             ttk.Label(
                 self.keyword_checks_frame,
                 text="Список ключевых слов пуст. Заполните SEARCH_KEYWORDS в config.py",
@@ -1432,7 +1468,7 @@ class ProcurementApp:
             self._update_select_all_button_text()
             return
 
-        for i, kw in enumerate(self.search_keyword_list):
+        for i, kw in enumerate(self.base_search_keywords):
             is_checked = prev_state.get(kw, True)
             var = tk.BooleanVar(value=is_checked)
             self.search_keyword_vars[kw] = var
@@ -1441,19 +1477,68 @@ class ProcurementApp:
 
         self._update_select_all_button_text()
 
+    def _render_custom_keyword_checkboxes(self):
+        if not getattr(self, "custom_keyword_checks_frame", None):
+            return
+
+        prev_state = {}
+        for kw, var in (self.custom_search_keyword_vars or {}).items():
+            prev_state[kw] = bool(var.get())
+
+        for child in self.custom_keyword_checks_frame.winfo_children():
+            child.destroy()
+
+        self.custom_search_keyword_vars = {}
+
+        if not self.custom_search_keywords:
+            ttk.Label(
+                self.custom_keyword_checks_frame,
+                text="Нет добавленных слов",
+                foreground="#64748B",
+            ).grid(row=0, column=0, sticky="w", pady=2)
+            self._update_select_all_button_text()
+            return
+
+        for i, kw in enumerate(self.custom_search_keywords):
+            is_checked = prev_state.get(kw, True)
+            var = tk.BooleanVar(value=is_checked)
+            self.custom_search_keyword_vars[kw] = var
+
+            row = ttk.Frame(self.custom_keyword_checks_frame)
+            row.grid(row=i, column=0, sticky="ew", pady=1)
+            row.columnconfigure(0, weight=1)
+
+            cb = ttk.Checkbutton(row, text=kw, variable=var)
+            cb.grid(row=0, column=0, sticky="w")
+
+            remove_btn = ttk.Button(
+                row,
+                text="Удалить",
+                command=lambda value=kw: self._remove_custom_keyword(value),
+                width=10,
+            )
+            remove_btn.grid(row=0, column=1, sticky="e", padx=(8, 0))
+
+        self._update_select_all_button_text()
+
     def _add_custom_keyword(self, event=None):
         keyword = (self.custom_keyword_var.get() or "").strip()
         if not keyword:
             return
 
-        existing = {k.lower() for k in self.search_keyword_list}
+        existing = {k.lower() for k in self.base_search_keywords}
+        existing.update(k.lower() for k in self.custom_search_keywords)
         if keyword.lower() in existing:
             self.custom_keyword_var.set("")
             return
 
         self.custom_search_keywords.append(keyword)
         self.custom_keyword_var.set("")
-        self._render_keyword_checkboxes()
+        self._render_custom_keyword_checkboxes()
+
+    def _remove_custom_keyword(self, keyword: str):
+        self.custom_search_keywords = [k for k in self.custom_search_keywords if k != keyword]
+        self._render_custom_keyword_checkboxes()
 
     def _reset_llm_cache(self):
         self._lot_llm_cache = {}
@@ -1658,6 +1743,7 @@ class ProcurementApp:
                     "work_scope": "—",
                     "work_and_submission_timelines": "Сроки работ: —; Сроки подачи: —",
                     "fit_summary": "—",
+                    "final_verdict": "Неопределенно",
                 }
 
             cache_key = self._lot_report_key(lot)
