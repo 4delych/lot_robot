@@ -3,6 +3,7 @@ import sys
 import subprocess
 import tempfile
 import re
+import html
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, scrolledtext
 import threading
@@ -10,6 +11,7 @@ import pandas as pd
 import logging
 import webbrowser
 import json
+from pathlib import Path
 
 
 from config import PURCHASE_STAGES, LAWS, CONFIG
@@ -720,13 +722,21 @@ class ProcurementApp:
         )
         self.export_pdf_btn.grid(row=0, column=0, sticky="w")
 
+        self.export_selected_pdf_btn = ttk.Button(
+            actions_frame,
+            text="Экспорт выбранных в PDF",
+            command=self._export_selected_reports_to_pdf,
+            state="disabled",
+        )
+        self.export_selected_pdf_btn.grid(row=0, column=1, sticky="w", padx=(6, 0))
+
         self.copy_report_btn = ttk.Button(
             actions_frame,
             text="Копировать отчет",
             command=self._copy_report_to_clipboard,
             state="disabled",
         )
-        self.copy_report_btn.grid(row=0, column=1, sticky="w", padx=(6, 0))
+        self.copy_report_btn.grid(row=0, column=2, sticky="w", padx=(6, 0))
 
         self.open_source_btn = ttk.Button(
             actions_frame,
@@ -734,7 +744,7 @@ class ProcurementApp:
             command=self._open_current_lot_link,
             state="disabled",
         )
-        self.open_source_btn.grid(row=0, column=2, sticky="w", padx=(6, 0))
+        self.open_source_btn.grid(row=0, column=3, sticky="w", padx=(6, 0))
 
     def _on_item_double_click(self, event):
         """Handle double-click on table item to open link."""
@@ -836,6 +846,10 @@ class ProcurementApp:
         self.lot_analyze_btn.config(
             state="normal" if self._selected_lots else "disabled"
         )
+        if getattr(self, "export_selected_pdf_btn", None):
+            self.export_selected_pdf_btn.config(
+                state="normal" if self._selected_lots else "disabled"
+            )
         if not self._selected_lots:
             self.open_source_btn.config(state="disabled")
             return
@@ -919,6 +933,8 @@ class ProcurementApp:
         )
         self.report_text.config(state=tk.DISABLED)
         self.export_pdf_btn.config(state="disabled")
+        if getattr(self, "export_selected_pdf_btn", None) and not self._selected_lots:
+            self.export_selected_pdf_btn.config(state="disabled")
         self.copy_report_btn.config(state="disabled")
 
     def _set_verdict_style(self, verdict_type: str) -> None:
@@ -995,42 +1011,15 @@ class ProcurementApp:
         self.verdict_explanation_var.set(fit_summary or "—")
         self._set_verdict_style(verdict_type)
 
-        # Структурированный отчет
-        self.report_text.insert(tk.END, "ОТЧЕТ ПО ЛОТУ\n")
-        self.report_text.insert(tk.END, "=" * 60 + "\n\n")
-
-        self.report_text.insert(tk.END, "1) ЦЕЛЬ РАБОТ\n")
-        self.report_text.insert(tk.END, "-" * 40 + "\n")
-        self.report_text.insert(tk.END, f"{subject or '—'}\n\n")
-
-        self.report_text.insert(tk.END, "2) ЗАДАЧИ / СОСТАВ РАБОТ\n")
-        self.report_text.insert(tk.END, "-" * 40 + "\n")
-        if work_scope and work_scope != "—":
-            # разбиваем по ';' для удобства чтения
-            parts = [p.strip() for p in work_scope.split(";") if p.strip()]
-            for p in parts:
-                self.report_text.insert(tk.END, f" • {p}\n")
-            self.report_text.insert(tk.END, "\n")
-        else:
-            self.report_text.insert(tk.END, "—\n\n")
-
-        self.report_text.insert(tk.END, "3) ОБЪЕМ И СРОКИ РАБОТ / ПОДАЧИ\n")
-        self.report_text.insert(tk.END, "-" * 40 + "\n")
-        self.report_text.insert(tk.END, f"{timelines}\n\n")
-
-        self.report_text.insert(tk.END, "4) СРОКИ ЗАКУПКИ\n")
-        self.report_text.insert(tk.END, "-" * 40 + "\n")
-        self.report_text.insert(
-            tk.END,
-            f"Окончание подачи заявок (с сайта): {lot_deadline or '—'}\n\n",
+        report_content = self._compose_report_text(
+            lot_title=lot_title,
+            lot_url=lot_url,
+            lot_source=lot_source,
+            lot_price=lot_price,
+            lot_deadline=lot_deadline,
+            llm_data=llm_data,
         )
-
-        self.report_text.insert(tk.END, "5) ОБЩИЕ СВЕДЕНИЯ О ЛОТЕ\n")
-        self.report_text.insert(tk.END, "-" * 40 + "\n")
-        self.report_text.insert(tk.END, f"Наименование: {lot_title}\n")
-        self.report_text.insert(tk.END, f"Ссылка: {lot_url}\n")
-        self.report_text.insert(tk.END, f"Площадка: {lot_source}\n")
-        self.report_text.insert(tk.END, f"Стоимость: {lot_price}\n\n")
+        self.report_text.insert(tk.END, report_content)
 
         self.report_text.config(state=tk.DISABLED)
 
@@ -1038,8 +1027,64 @@ class ProcurementApp:
         self.export_pdf_btn.config(state="normal")
         self.copy_report_btn.config(state="normal")
 
+    def _compose_report_text(
+        self,
+        lot_title: str,
+        lot_url: str,
+        lot_source: str,
+        lot_price: str,
+        lot_deadline: str,
+        llm_data: dict,
+    ) -> str:
+        subject = llm_data.get("subject", "—")
+        work_scope = llm_data.get("work_scope", "—")
+        timelines = llm_data.get(
+            "work_and_submission_timelines",
+            "Сроки работ: —; Сроки подачи: —",
+        )
+
+        parts = [
+            "ОТЧЕТ ПО ЛОТУ",
+            "=" * 60,
+            "",
+            "1) ЦЕЛЬ РАБОТ",
+            "-" * 40,
+            f"{subject or '—'}",
+            "",
+            "2) ЗАДАЧИ / СОСТАВ РАБОТ",
+            "-" * 40,
+        ]
+
+        if work_scope and work_scope != "—":
+            for item in [p.strip() for p in work_scope.split(";") if p.strip()]:
+                parts.append(f" • {item}")
+            parts.append("")
+        else:
+            parts.extend(["—", ""])
+
+        parts.extend(
+            [
+                "3) ОБЪЕМ И СРОКИ РАБОТ / ПОДАЧИ",
+                "-" * 40,
+                timelines,
+                "",
+                "4) СРОКИ ЗАКУПКИ",
+                "-" * 40,
+                f"Окончание подачи заявок (с сайта): {lot_deadline or '—'}",
+                "",
+                "5) ОБЩИЕ СВЕДЕНИЯ О ЛОТЕ",
+                "-" * 40,
+                f"Наименование: {lot_title}",
+                f"Ссылка: {lot_url}",
+                f"Площадка: {lot_source}",
+                f"Стоимость: {lot_price}",
+                "",
+            ]
+        )
+        return "\n".join(parts)
+
     def _export_report_to_pdf(self):
-        """Простой экспорт отчета в текстовый PDF-файл (как plain text)."""
+        """Экспортирует отчет в настоящий PDF через headless Edge/Chrome."""
         content = self.report_text.get("1.0", tk.END).strip()
         if not content:
             messagebox.showwarning("Нет данных", "Отчет еще не сформирован")
@@ -1054,12 +1099,215 @@ class ProcurementApp:
             return
 
         try:
-            # сохраняем как обычный текстовый контент — без сторонних библиотек PDF
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.write(content)
+            self._write_pdf_file(file_path, content)
             messagebox.showinfo("Сохранено", f"Отчет сохранен в файл:\n{file_path}")
         except Exception as e:
             messagebox.showerror("Ошибка", f"Не удалось сохранить отчет:\n{e}")
+
+    def _export_selected_reports_to_pdf(self):
+        lots = list(self._selected_lots or [])
+        if not lots:
+            messagebox.showwarning("Нет данных", "Сначала выберите хотя бы один лот")
+            return
+
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".pdf",
+            filetypes=[("PDF файлы", "*.pdf"), ("Все файлы", "*.*")],
+            title="Сохранить общий отчет",
+            initialfile="selected_lots_report.pdf",
+        )
+        if not file_path:
+            return
+
+        thread = threading.Thread(
+            target=self._perform_export_selected_reports,
+            args=(lots, file_path),
+            daemon=True,
+        )
+        thread.start()
+
+    def _perform_export_selected_reports(self, lots: list[dict], file_path: str):
+        self.root.after(0, lambda: self.progress_bar.start())
+        try:
+            browser_path = self._find_pdf_browser()
+            if not browser_path:
+                raise RuntimeError(
+                    "Не найден Microsoft Edge или Google Chrome для генерации PDF"
+                )
+
+            total = len(lots)
+            combined_parts = []
+            for idx, lot in enumerate(lots, start=1):
+                title = (lot.get("title") or f"lot_{idx}").strip()
+                self.root.after(
+                    0,
+                    lambda i=idx, t=total, name=title: self.progress_var.set(
+                        f"Экспорт PDF {i}/{t}: {name}"
+                    ),
+                )
+
+                cache_key = self._lot_report_key(lot)
+                cached = self._lot_report_cache.get(cache_key)
+                if not cached:
+                    self._perform_lot_report(
+                        lot,
+                        manage_progress=False,
+                        progress_prefix=f"Лот {idx}/{total}: ",
+                    )
+                    cached = self._lot_report_cache.get(cache_key)
+                if not cached:
+                    raise RuntimeError(f"Не удалось сформировать отчет для лота: {title}")
+
+                report_text = self._compose_report_text(
+                    lot_title=cached.get("lot_title") or title,
+                    lot_url=cached.get("lot_url") or lot.get("url") or "—",
+                    lot_source=cached.get("lot_source") or lot.get("source") or "—",
+                    lot_price=cached.get("lot_price") or str(lot.get("price") or "Не указана"),
+                    lot_deadline=cached.get("lot_deadline") or "—",
+                    llm_data=cached.get("llm_data") or {},
+                )
+                lot_title = cached.get("lot_title") or title
+                lot_url = cached.get("lot_url") or lot.get("url") or "—"
+                section = "\n".join(
+                    [
+                        "#" * 80,
+                        f"ЛОТ {idx} ИЗ {total}",
+                        f"Наименование: {lot_title}",
+                        f"Ссылка: {lot_url}",
+                        "#" * 80,
+                        "",
+                        report_text,
+                    ]
+                )
+                combined_parts.append(section)
+
+            combined_report = "\n\n".join(combined_parts)
+            self._write_pdf_file(file_path, combined_report, browser_path=browser_path)
+            self.root.after(
+                0,
+                lambda path=file_path, count=total: messagebox.showinfo(
+                    "Сохранено",
+                    f"Сохранен общий PDF по лотам: {count}\nФайл: {path}",
+                ),
+            )
+        except Exception as e:
+            err_text = str(e)
+            self.root.after(
+                0,
+                lambda err=err_text: messagebox.showerror(
+                    "Ошибка", f"Не удалось экспортировать PDF:\n{err}"
+                ),
+            )
+        finally:
+            self.root.after(0, lambda: self.progress_bar.stop())
+
+    def _write_pdf_file(self, file_path: str, content: str, browser_path: str | None = None):
+        html_path = None
+        try:
+            browser_path = browser_path or self._find_pdf_browser()
+            if not browser_path:
+                raise RuntimeError(
+                    "Не найден Microsoft Edge или Google Chrome для генерации PDF"
+                )
+
+            html_content = self._build_report_pdf_html(content)
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                suffix=".html",
+                delete=False,
+                encoding="utf-8",
+            ) as tmp:
+                tmp.write(html_content)
+                html_path = tmp.name
+
+            html_uri = Path(html_path).resolve().as_uri()
+            abs_pdf_path = str(Path(file_path).resolve())
+            cmd = [
+                browser_path,
+                "--headless",
+                "--disable-gpu",
+                "--allow-file-access-from-files",
+                f"--print-to-pdf={abs_pdf_path}",
+                html_uri,
+            ]
+            completed = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+            if completed.returncode != 0 or not os.path.exists(abs_pdf_path):
+                stderr = (completed.stderr or completed.stdout or "").strip()
+                raise RuntimeError(stderr or "Браузер не смог сформировать PDF")
+        finally:
+            try:
+                if html_path and os.path.exists(html_path):
+                    os.remove(html_path)
+            except Exception:
+                pass
+
+    def _find_pdf_browser(self):
+        browser_candidates = [
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        ]
+        for path in browser_candidates:
+            if os.path.exists(path):
+                return path
+        return None
+
+    def _build_report_pdf_html(self, content: str) -> str:
+        escaped_content = html.escape(content)
+        return f"""<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Отчет по лоту</title>
+  <style>
+    @page {{
+      size: A4;
+      margin: 18mm 14mm;
+    }}
+    body {{
+      font-family: "Arial", "Segoe UI", sans-serif;
+      color: #111827;
+      font-size: 12px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }}
+    .report {{
+      width: 100%;
+    }}
+  </style>
+</head>
+<body>
+  <div class="report">{escaped_content}</div>
+</body>
+</html>
+"""
+
+    def _sanitize_filename(self, value: str) -> str:
+        name = re.sub(r'[<>:"/\\\\|?*]+', "_", (value or "").strip())
+        name = re.sub(r"\s+", " ", name).strip(" .")
+        return name[:120] or "lot_report"
+
+    def _make_unique_path(self, file_path: str) -> str:
+        path = Path(file_path)
+        if not path.exists():
+            return str(path)
+        stem = path.stem
+        suffix = path.suffix
+        parent = path.parent
+        idx = 2
+        while True:
+            candidate = parent / f"{stem}_{idx}{suffix}"
+            if not candidate.exists():
+                return str(candidate)
+            idx += 1
 
     def _copy_report_to_clipboard(self):
         """Копирует текст отчета в буфер обмена."""
