@@ -6,6 +6,8 @@ import logging
 import zipfile
 import html
 import tempfile
+import subprocess
+import shutil
 import locale
 from urllib.parse import urljoin, urlparse, parse_qs, unquote
 import re
@@ -53,6 +55,25 @@ logger = logging.getLogger(__name__)
 
 class ProcurementSearcher:
     """Handle web scraping operations with proper error handling and session management."""
+
+    _ARCHIVE_EXTENSIONS = {".zip", ".rar", ".7z"}
+    _TEXT_EXTRACT_EXTENSIONS = {
+        ".pdf",
+        ".doc",
+        ".docx",
+        ".xls",
+        ".xlsx",
+        ".xlsm",
+        ".xltx",
+        ".xltm",
+        ".txt",
+        ".rtf",
+        ".odt",
+        ".ods",
+    }
+    _ARCHIVE_MAX_DEPTH = 2
+    _ARCHIVE_MAX_FILES = 100
+    _ARCHIVE_MAX_TOTAL_SIZE = 50 * 1024 * 1024
 
     def build_lot_documents_text(self, documents: list[dict], max_chars: int = 120_000) -> str:
         """
@@ -555,6 +576,328 @@ class ProcurementSearcher:
 
         # если букв меньше ~12% — это почти наверняка мусор
         return ratio < 0.12
+
+    def _is_archive_document(self, filename: str, content_type: str = "") -> bool:
+        name = (filename or "").lower()
+        ctype = (content_type or "").lower()
+        if any(name.endswith(ext) for ext in self._ARCHIVE_EXTENSIONS):
+            return True
+        return "zip" in ctype
+
+    def _is_extractable_document(self, filename: str) -> bool:
+        name = (filename or "").lower()
+        return any(name.endswith(ext) for ext in self._TEXT_EXTRACT_EXTENSIONS)
+
+    def _expand_downloaded_documents(
+        self,
+        documents: list[dict],
+        progress_callback=None,
+    ) -> list[dict]:
+        expanded: list[dict] = []
+        total_archives = sum(
+            1
+            for doc in documents
+            if self._is_archive_document(
+                self._determine_document_filename(doc),
+                doc.get("content_type", ""),
+            )
+        )
+        archive_idx = 0
+
+        for doc in documents:
+            filename = self._determine_document_filename(doc)
+            if not self._is_archive_document(filename, doc.get("content_type", "")):
+                expanded.append(doc)
+                continue
+
+            archive_idx += 1
+            if progress_callback:
+                try:
+                    progress_callback(
+                        f"Распаковка архива {archive_idx}/{max(total_archives, 1)}: {doc.get('name') or filename}"
+                    )
+                except Exception:
+                    pass
+
+            extracted = self._extract_documents_from_archive(doc, progress_callback)
+            if extracted:
+                expanded.extend(extracted)
+            else:
+                logger.info(
+                    "Archive kept without extraction results: %s",
+                    doc.get("name") or filename,
+                )
+                expanded.append(doc)
+
+        return expanded
+
+    def _extract_documents_from_archive(
+        self,
+        doc: dict,
+        progress_callback=None,
+        depth: int = 0,
+        parent_path: str | None = None,
+    ) -> list[dict]:
+        filename = self._determine_document_filename(doc)
+        if filename.lower().endswith(".zip") or "zip" in (doc.get("content_type", "") or "").lower():
+            return self._extract_documents_from_zip(
+                doc,
+                depth=depth,
+                progress_callback=progress_callback,
+                parent_path=parent_path,
+            )
+        if filename.lower().endswith((".rar", ".7z")):
+            return self._extract_documents_with_7z(
+                doc,
+                depth=depth,
+                progress_callback=progress_callback,
+                parent_path=parent_path,
+            )
+        return []
+
+    def _extract_documents_from_zip(
+        self,
+        doc: dict,
+        depth: int = 0,
+        progress_callback=None,
+        parent_path: str | None = None,
+    ) -> list[dict]:
+        if depth > self._ARCHIVE_MAX_DEPTH:
+            logger.info("Archive nesting depth exceeded for %s", doc.get("name"))
+            return []
+
+        archive_name = parent_path or (doc.get("name") or self._determine_document_filename(doc))
+        extracted_docs: list[dict] = []
+        total_size = 0
+
+        try:
+            with zipfile.ZipFile(BytesIO(doc.get("content") or b"")) as zf:
+                members = [m for m in zf.infolist() if not m.is_dir()]
+                if len(members) > self._ARCHIVE_MAX_FILES:
+                    logger.warning(
+                        "Archive %s has too many files (%s), truncating to %s",
+                        archive_name,
+                        len(members),
+                        self._ARCHIVE_MAX_FILES,
+                    )
+                    members = members[: self._ARCHIVE_MAX_FILES]
+
+                for member in members:
+                    inner_name = (member.filename or "").replace("\\", "/").strip("/")
+                    if not inner_name:
+                        continue
+
+                    basename = os.path.basename(inner_name)
+                    if basename.startswith(".") or basename.startswith("~$"):
+                        continue
+
+                    total_size += max(member.file_size, 0)
+                    if total_size > self._ARCHIVE_MAX_TOTAL_SIZE:
+                        logger.warning(
+                            "Archive %s exceeds size limit after %s bytes",
+                            archive_name,
+                            total_size,
+                        )
+                        break
+
+                    try:
+                        content = zf.read(member)
+                    except RuntimeError as e:
+                        logger.warning("Failed to read zip member %s: %s", inner_name, e)
+                        continue
+                    except Exception as e:
+                        logger.warning("Unexpected zip read error for %s: %s", inner_name, e)
+                        continue
+
+                    composed_name = f"{archive_name} -> {inner_name}"
+                    content_type = self._guess_content_type_by_name(inner_name)
+                    nested_doc = {
+                        "name": composed_name,
+                        "filename": inner_name,
+                        "content": content,
+                        "size": len(content),
+                        "url": doc.get("url"),
+                        "content_type": content_type,
+                        "source_archive": archive_name,
+                    }
+
+                    if self._is_archive_document(inner_name, content_type):
+                        nested = self._extract_documents_from_archive(
+                            nested_doc,
+                            progress_callback=progress_callback,
+                            depth=depth + 1,
+                            parent_path=composed_name,
+                        )
+                        if nested:
+                            extracted_docs.extend(nested)
+                            continue
+
+                    if self._is_extractable_document(inner_name):
+                        extracted_docs.append(nested_doc)
+
+        except zipfile.BadZipFile as e:
+            logger.warning("Bad ZIP archive %s: %s", archive_name, e)
+            return []
+        except Exception as e:
+            logger.warning("Archive extraction failed for %s: %s", archive_name, e)
+            return []
+
+        return extracted_docs
+
+    def _find_7z_executable(self) -> str | None:
+        candidates = [
+            r"C:\Program Files\7-Zip\7z.exe",
+            r"C:\Program Files (x86)\7-Zip\7z.exe",
+        ]
+        for path in candidates:
+            if os.path.exists(path):
+                return path
+        return shutil.which("7z")
+
+    def _extract_documents_with_7z(
+        self,
+        doc: dict,
+        depth: int = 0,
+        progress_callback=None,
+        parent_path: str | None = None,
+    ) -> list[dict]:
+        if depth > self._ARCHIVE_MAX_DEPTH:
+            logger.info("Archive nesting depth exceeded for %s", doc.get("name"))
+            return []
+
+        seven_zip = self._find_7z_executable()
+        if not seven_zip:
+            logger.warning("7z.exe not found, cannot extract archive %s", doc.get("name"))
+            return []
+
+        archive_name = parent_path or (doc.get("name") or self._determine_document_filename(doc))
+        temp_archive_path = None
+        temp_dir = None
+        extracted_docs: list[dict] = []
+
+        try:
+            suffix = os.path.splitext(self._determine_document_filename(doc))[1] or ".bin"
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_archive:
+                tmp_archive.write(doc.get("content") or b"")
+                temp_archive_path = tmp_archive.name
+
+            temp_dir = tempfile.mkdtemp(prefix="lot_archive_")
+            cmd = [seven_zip, "x", "-y", f"-o{temp_dir}", temp_archive_path]
+            completed = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+            if completed.returncode not in (0, 1):
+                logger.warning(
+                    "7z extraction failed for %s: %s",
+                    archive_name,
+                    (completed.stderr or completed.stdout or "").strip(),
+                )
+                return []
+
+            total_size = 0
+            total_files = 0
+            for root, _dirs, files in os.walk(temp_dir):
+                files.sort()
+                for file_name in files:
+                    total_files += 1
+                    if total_files > self._ARCHIVE_MAX_FILES:
+                        logger.warning(
+                            "Archive %s has too many files (%s), truncating",
+                            archive_name,
+                            total_files,
+                        )
+                        return extracted_docs
+
+                    full_path = os.path.join(root, file_name)
+                    rel_path = os.path.relpath(full_path, temp_dir).replace("\\", "/")
+                    if file_name.startswith(".") or file_name.startswith("~$"):
+                        continue
+
+                    try:
+                        with open(full_path, "rb") as f:
+                            content = f.read()
+                    except Exception as e:
+                        logger.warning("Failed to read extracted file %s: %s", rel_path, e)
+                        continue
+
+                    total_size += len(content)
+                    if total_size > self._ARCHIVE_MAX_TOTAL_SIZE:
+                        logger.warning(
+                            "Archive %s exceeds size limit after %s bytes",
+                            archive_name,
+                            total_size,
+                        )
+                        return extracted_docs
+
+                    composed_name = f"{archive_name} -> {rel_path}"
+                    content_type = self._guess_content_type_by_name(rel_path)
+                    nested_doc = {
+                        "name": composed_name,
+                        "filename": rel_path,
+                        "content": content,
+                        "size": len(content),
+                        "url": doc.get("url"),
+                        "content_type": content_type,
+                        "source_archive": archive_name,
+                    }
+
+                    if self._is_archive_document(rel_path, content_type):
+                        nested = self._extract_documents_from_archive(
+                            nested_doc,
+                            progress_callback=progress_callback,
+                            depth=depth + 1,
+                            parent_path=composed_name,
+                        )
+                        if nested:
+                            extracted_docs.extend(nested)
+                            continue
+
+                    if self._is_extractable_document(rel_path):
+                        extracted_docs.append(nested_doc)
+
+        except Exception as e:
+            logger.warning("7z extraction failed for %s: %s", archive_name, e)
+            return []
+        finally:
+            try:
+                if temp_archive_path and os.path.exists(temp_archive_path):
+                    os.remove(temp_archive_path)
+            except Exception:
+                pass
+            try:
+                if temp_dir and os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+            except Exception:
+                pass
+
+        return extracted_docs
+
+    def _guess_content_type_by_name(self, filename: str) -> str:
+        name = (filename or "").lower()
+        mapping = {
+            ".pdf": "application/pdf",
+            ".doc": "application/msword",
+            ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ".xls": "application/vnd.ms-excel",
+            ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ".xlsm": "application/vnd.ms-excel.sheet.macroEnabled.12",
+            ".txt": "text/plain",
+            ".rtf": "application/rtf",
+            ".zip": "application/zip",
+            ".rar": "application/vnd.rar",
+            ".7z": "application/x-7z-compressed",
+            ".odt": "application/vnd.oasis.opendocument.text",
+            ".ods": "application/vnd.oasis.opendocument.spreadsheet",
+        }
+        for ext, ctype in mapping.items():
+            if name.endswith(ext):
+                return ctype
+        return "application/octet-stream"
+
     def __init__(self, sources: list[ProcurementSource] | None = None):
         self.session = self._create_session()
         # По умолчанию используем все доступные источники
@@ -1495,8 +1838,19 @@ class ProcurementSearcher:
                     logger.warning(f"Failed to download document {doc['name']}: {e}")
                     continue
 
-            logger.info(f"Successfully downloaded {len(downloaded_docs)} documents")
-            return downloaded_docs
+            expanded_docs = self._expand_downloaded_documents(
+                downloaded_docs,
+                progress_callback=progress_callback,
+            )
+            if len(expanded_docs) != len(downloaded_docs):
+                logger.info(
+                    "Expanded documents from %s to %s after archive extraction",
+                    len(downloaded_docs),
+                    len(expanded_docs),
+                )
+            else:
+                logger.info("Successfully downloaded %s documents", len(downloaded_docs))
+            return expanded_docs
 
         except Exception as e:
             logger.error(f"Error downloading documents: {e}")
