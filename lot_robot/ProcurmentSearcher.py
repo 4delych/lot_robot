@@ -104,6 +104,20 @@ class ProcurementSearcher:
                 logger.info("Skip garbage/empty extracted text: %s", doc.get("name") or filename)
                 continue
 
+            if doc.get("source_archive"):
+                logger.info(
+                    "Документ из архива добавлен в объединенный текст: архив=%r файл=%r символов=%s",
+                    doc.get("source_archive"),
+                    doc.get("name") or filename,
+                    len(text),
+                )
+            else:
+                logger.info(
+                    "Документ добавлен в объединенный текст: файл=%r символов=%s",
+                    doc.get("name") or filename,
+                    len(text),
+                )
+
             header = f"\n\n===== ДОКУМЕНТ: {doc.get('name') or filename} =====\n"
             chunk = header + text
 
@@ -669,6 +683,7 @@ class ProcurementSearcher:
         archive_name = parent_path or (doc.get("name") or self._determine_document_filename(doc))
         extracted_docs: list[dict] = []
         total_size = 0
+        logger.info("Открытие ZIP-архива для распаковки: %s", archive_name)
 
         try:
             with zipfile.ZipFile(BytesIO(doc.get("content") or b"")) as zf:
@@ -689,6 +704,11 @@ class ProcurementSearcher:
 
                     basename = os.path.basename(inner_name)
                     if basename.startswith(".") or basename.startswith("~$"):
+                        logger.info(
+                            "Пропуск скрытого/временного файла в архиве %s: %s",
+                            archive_name,
+                            inner_name,
+                        )
                         continue
 
                     total_size += max(member.file_size, 0)
@@ -711,6 +731,12 @@ class ProcurementSearcher:
 
                     composed_name = f"{archive_name} -> {inner_name}"
                     content_type = self._guess_content_type_by_name(inner_name)
+                    logger.info(
+                        "Найден файл в архиве: архив=%r файл=%r размер=%s",
+                        archive_name,
+                        inner_name,
+                        len(content),
+                    )
                     nested_doc = {
                         "name": composed_name,
                         "filename": inner_name,
@@ -722,6 +748,11 @@ class ProcurementSearcher:
                     }
 
                     if self._is_archive_document(inner_name, content_type):
+                        logger.info(
+                            "Найден вложенный архив: архив=%r файл=%r",
+                            archive_name,
+                            inner_name,
+                        )
                         nested = self._extract_documents_from_archive(
                             nested_doc,
                             progress_callback=progress_callback,
@@ -733,7 +764,18 @@ class ProcurementSearcher:
                             continue
 
                     if self._is_extractable_document(inner_name):
+                        logger.info(
+                            "Файл из архива принят в анализ: архив=%r файл=%r",
+                            archive_name,
+                            inner_name,
+                        )
                         extracted_docs.append(nested_doc)
+                    else:
+                        logger.info(
+                            "Файл из архива пропущен по расширению: архив=%r файл=%r",
+                            archive_name,
+                            inner_name,
+                        )
 
         except zipfile.BadZipFile as e:
             logger.warning("Bad ZIP archive %s: %s", archive_name, e)
@@ -774,6 +816,7 @@ class ProcurementSearcher:
         temp_archive_path = None
         temp_dir = None
         extracted_docs: list[dict] = []
+        logger.info("Открытие архива через 7z для распаковки: %s", archive_name)
 
         try:
             suffix = os.path.splitext(self._determine_document_filename(doc))[1] or ".bin"
@@ -815,6 +858,11 @@ class ProcurementSearcher:
                     full_path = os.path.join(root, file_name)
                     rel_path = os.path.relpath(full_path, temp_dir).replace("\\", "/")
                     if file_name.startswith(".") or file_name.startswith("~$"):
+                        logger.info(
+                            "Пропуск скрытого/временного файла в архиве %s: %s",
+                            archive_name,
+                            rel_path,
+                        )
                         continue
 
                     try:
@@ -835,6 +883,12 @@ class ProcurementSearcher:
 
                     composed_name = f"{archive_name} -> {rel_path}"
                     content_type = self._guess_content_type_by_name(rel_path)
+                    logger.info(
+                        "Найден файл в архиве: архив=%r файл=%r размер=%s",
+                        archive_name,
+                        rel_path,
+                        len(content),
+                    )
                     nested_doc = {
                         "name": composed_name,
                         "filename": rel_path,
@@ -846,6 +900,11 @@ class ProcurementSearcher:
                     }
 
                     if self._is_archive_document(rel_path, content_type):
+                        logger.info(
+                            "Найден вложенный архив: архив=%r файл=%r",
+                            archive_name,
+                            rel_path,
+                        )
                         nested = self._extract_documents_from_archive(
                             nested_doc,
                             progress_callback=progress_callback,
@@ -857,7 +916,18 @@ class ProcurementSearcher:
                             continue
 
                     if self._is_extractable_document(rel_path):
+                        logger.info(
+                            "Файл из архива принят в анализ: архив=%r файл=%r",
+                            archive_name,
+                            rel_path,
+                        )
                         extracted_docs.append(nested_doc)
+                    else:
+                        logger.info(
+                            "Файл из архива пропущен по расширению: архив=%r файл=%r",
+                            archive_name,
+                            rel_path,
+                        )
 
         except Exception as e:
             logger.warning("7z extraction failed for %s: %s", archive_name, e)
