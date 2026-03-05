@@ -78,6 +78,10 @@ class ProcurementSearcher:
         "техническое задание",
         "тех задание",
         "техзадание",
+        "ТЗ",
+        "задание",
+        "техническое_задание",
+        "тех_задание",
         "technical specification",
         "statement of work",
     )
