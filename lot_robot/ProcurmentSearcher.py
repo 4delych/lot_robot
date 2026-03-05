@@ -74,6 +74,23 @@ class ProcurementSearcher:
     _ARCHIVE_MAX_DEPTH = 2
     _ARCHIVE_MAX_FILES = 100
     _ARCHIVE_MAX_TOTAL_SIZE = 50 * 1024 * 1024
+    _TZ_STRONG_MARKERS = (
+        "техническое задание",
+        "тех задание",
+        "техзадание",
+        "technical specification",
+        "statement of work",
+    )
+    _TZ_WEAK_MARKERS = (
+        " тз ",
+        "/тз/",
+        "\\тз\\",
+        "(тз)",
+        "_тз",
+        "тз_",
+        "-тз",
+        "тз-",
+    )
 
     def build_lot_documents_text(self, documents: list[dict], max_chars: int = 120_000) -> str:
         """
@@ -83,8 +100,19 @@ class ProcurementSearcher:
         """
         parts: list[str] = []
         total = 0
+        ordered_documents = sorted(documents, key=self._document_priority_sort_key)
 
-        for doc in documents:
+        logger.info("Порядок обхода документов перед объединением:")
+        for idx, doc in enumerate(ordered_documents, start=1):
+            path_hint = self._document_path_hint(doc)
+            logger.info(
+                "  %s) приоритет=%s файл=%r",
+                idx,
+                self._document_priority_score(doc),
+                path_hint,
+            )
+
+        for doc in ordered_documents:
             filename = self._determine_document_filename(doc)
             raw_text = self._extract_text_from_content(
                 doc.get("content") or b"",
@@ -101,7 +129,10 @@ class ProcurementSearcher:
             text = "\n".join(lines).strip()
 
             if not text or self._looks_like_garbage_text(text):
-                logger.info("Skip garbage/empty extracted text: %s", doc.get("name") or filename)
+                logger.info(
+                    "Документ пропущен: пустой или мусорный текст: файл=%r",
+                    doc.get("name") or filename,
+                )
                 continue
 
             if doc.get("source_archive"):
@@ -122,6 +153,12 @@ class ProcurementSearcher:
             chunk = header + text
 
             if total + len(chunk) > max_chars:
+                logger.info(
+                    "Документ не полностью вошел в объединенный текст из-за лимита: файл=%r доступно_символов=%s размер_фрагмента=%s",
+                    doc.get("name") or filename,
+                    max_chars - total,
+                    len(chunk),
+                )
                 remain = max_chars - total
                 if remain > 0:
                     parts.append(chunk[:remain])
@@ -139,6 +176,46 @@ class ProcurementSearcher:
         print("chars:", len(combined))
         print("preview(first):")
         print(combined[:preview_len])
+        return combined
+
+    def _document_path_hint(self, doc: dict) -> str:
+        return (
+            (doc.get("name") or "").strip()
+            or (doc.get("filename") or "").strip()
+            or self._determine_document_filename(doc)
+        )
+
+    def _document_priority_score(self, doc: dict) -> int:
+        path_hint = self._document_path_hint(doc)
+        path_norm = f" {path_hint.lower().replace('\\', '/')} "
+        basename = os.path.basename(path_norm.strip())
+        score = 100
+
+        if any(marker in path_norm for marker in self._TZ_STRONG_MARKERS):
+            score -= 80
+        if any(marker in path_norm for marker in self._TZ_WEAK_MARKERS):
+            score -= 50
+        if basename.startswith("тз") or basename.endswith("тз.docx") or basename.endswith("тз.doc"):
+            score -= 40
+        if "документация" in path_norm:
+            score -= 20
+        if "техническая часть" in path_norm:
+            score -= 20
+        if "приложение" in path_norm:
+            score += 5
+        if path_hint.lower().endswith(".pdf"):
+            score += 5
+
+        return score
+
+    def _document_priority_sort_key(self, doc: dict):
+        path_hint = self._document_path_hint(doc)
+        score = self._document_priority_score(doc)
+        return (
+            score,
+            len(path_hint),
+            path_hint.lower(),
+        )
         print("preview(last):")
         print(combined[-preview_len:] if len(combined) > preview_len else combined)
 
