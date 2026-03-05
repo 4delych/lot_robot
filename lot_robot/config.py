@@ -45,7 +45,7 @@ CONFIG["LLM_API_URL"] = ""  # optional override for active provider
 CONFIG["LLM_MODEL"] = ""  # optional override for active provider
 CONFIG["LLM_REQUEST_TIMEOUT"] = 180  # Увеличил таймаут до 3 минут
 CONFIG["LLM_BATCH_SIZE"] = 5  # Уменьшил размер batch чтобы не перегружать API
-CONFIG["SEARCH_KEYWORDS"] = ["консалтинг", "справочная", "ТОиР", "EAM", "ЕАМ", "Методология", "Методика", "Бизнес-процесс", "Внедрение", "Проектирование", "Нормализация", "управление активами"]
+CONFIG["SEARCH_KEYWORDS"] = ["Комбинезон", "Комбинезон одноразовый", "Химическая защита", "Защитный костюм", "Средства индивидуальной защиты", "СИЗ"]
 
 # Lot prefilter (download first N lots and scan content for keywords/blacklist)
 CONFIG["LOT_PREFILTER_ENABLED"] = True
